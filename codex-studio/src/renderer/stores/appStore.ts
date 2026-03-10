@@ -1,0 +1,409 @@
+import { create } from 'zustand';
+import type {
+  Message,
+  SessionInfo,
+  GitStatus,
+  PanelState,
+  PanelSizes,
+  CurrentSession,
+} from '../types';
+
+export interface ToolActivity {
+  id: string;
+  name: string;
+  input?: string; // brief description of input
+  inputFull?: string; // full JSON input
+  output?: string; // tool result (truncated)
+  status: 'running' | 'done';
+  timestamp: number;
+}
+
+export interface PendingQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface PendingQuestionItem {
+  header: string;
+  question: string;
+  multiSelect: boolean;
+  options: PendingQuestionOption[];
+}
+
+export interface PendingQuestion {
+  toolId: string;
+  questions: PendingQuestionItem[];
+  answered: boolean;
+}
+
+// Per-session runtime state (preserved when switching threads)
+export interface SessionRuntime {
+  processId: string | null;
+  isStreaming: boolean;
+  streamingContent: string;
+  toolActivities: ToolActivity[];
+  messages: import('../types').Message[];
+}
+
+// A project folder added via "Add Folder" that has no real session yet
+export interface PendingProject {
+  path: string;
+  name: string;
+  branch?: string;
+}
+
+interface AppStore {
+  // Current session state
+  currentSession: CurrentSession;
+  sessions: SessionInfo[];
+  panels: PanelState;
+  panelSizes: PanelSizes;
+  currentProject: {
+    path: string;
+    name: string;
+    branch: string;
+  };
+  streamingContent: string;
+  toolActivities: ToolActivity[];
+  // Per-session runtime cache (keyed by session id or processId)
+  sessionRuntimes: Map<string, SessionRuntime>;
+  isLoadingSession: boolean;
+  gitStatus: GitStatus | null;
+  platform: 'mac' | 'windows' | 'linux';
+  revealFile: string | null; // file path to reveal in FileTree
+  pendingQuestion: PendingQuestion | null;
+  // Folders added via "Add Folder" that don't have real sessions yet
+  pendingProjects: PendingProject[];
+
+  // Session actions
+  setCurrentSession: (session: Partial<CurrentSession>) => void;
+  resetCurrentSession: () => void;
+  clearMessages: () => void;
+  addMessage: (message: Message) => void;
+  updateLastAssistantMessage: (content: string) => void;
+  setIsStreaming: (streaming: boolean) => void;
+  setProcessId: (processId: string | null) => void;
+
+  // Sessions list actions
+  setSessions: (sessions: SessionInfo[]) => void;
+
+  // Panel actions
+  togglePanel: (panel: keyof PanelState) => void;
+  setPanel: (panel: keyof PanelState, open: boolean) => void;
+  setPanelSize: (panel: keyof PanelSizes, size: number) => void;
+
+  // Project actions
+  setCurrentProject: (project: { path: string; name: string; branch?: string }) => void;
+  setBranch: (branch: string) => void;
+
+  // Streaming
+  setStreamingContent: (content: string) => void;
+  appendStreamingContent: (content: string) => void;
+  clearStreamingContent: () => void;
+
+  // Tool activities
+  addToolActivity: (activity: ToolActivity) => void;
+  updateToolActivity: (id: string, status: 'done') => void;
+  clearToolActivities: () => void;
+
+  // Session runtime save/restore
+  saveCurrentRuntime: () => void;
+  restoreRuntime: (sessionKey: string) => boolean;
+  removeRuntime: (sessionKey: string) => void;
+  updateBackgroundRuntime: (processId: string, updater: (runtime: SessionRuntime) => SessionRuntime) => void;
+  getRunningSessionIds: () => string[];
+  findSessionKeyByProcessId: (processId: string) => string | null;
+
+  // Loading
+  setIsLoadingSession: (loading: boolean) => void;
+
+  // Git
+  setGitStatus: (status: GitStatus | null) => void;
+
+  // Platform
+  setPlatform: (platform: 'mac' | 'windows' | 'linux') => void;
+
+  // Reveal file in FileTree
+  setRevealFile: (filePath: string | null) => void;
+
+  // AskUserQuestion
+  setPendingQuestion: (q: PendingQuestion | null) => void;
+  markQuestionAnswered: () => void;
+
+  // Pending projects (folders added without real sessions)
+  addPendingProject: (project: PendingProject) => void;
+  removePendingProject: (path: string) => void;
+}
+
+const defaultSession: CurrentSession = {
+  id: null,
+  processId: null,
+  projectPath: '',
+  title: '',
+  messages: [],
+  isStreaming: false,
+};
+
+export const useAppStore = create<AppStore>((set, get) => ({
+  currentSession: { ...defaultSession },
+  sessions: [],
+  panels: {
+    sidebar: true,
+    terminal: false,
+    diff: false,
+    logs: false,
+  },
+  panelSizes: {
+    sidebar: 240,
+    terminal: 250,
+    diff: 400,
+  },
+  currentProject: {
+    path: '',
+    name: '',
+    branch: '',
+  },
+  streamingContent: '',
+  toolActivities: [],
+  sessionRuntimes: new Map(),
+  isLoadingSession: false,
+  gitStatus: null,
+  platform: 'mac',
+  revealFile: null,
+  pendingQuestion: null,
+  pendingProjects: [],
+
+  // Session actions
+  setCurrentSession: (session) =>
+    set((state) => ({
+      currentSession: { ...state.currentSession, ...session },
+    })),
+
+  resetCurrentSession: () =>
+    set({
+      currentSession: { ...defaultSession },
+      streamingContent: '',
+      toolActivities: [],
+      pendingQuestion: null,
+    }),
+
+  clearMessages: () =>
+    set((state) => ({
+      currentSession: {
+        ...state.currentSession,
+        messages: [],
+      },
+      streamingContent: '',
+      toolActivities: [],
+      pendingQuestion: null,
+    })),
+
+  addMessage: (message) =>
+    set((state) => ({
+      currentSession: {
+        ...state.currentSession,
+        messages: [...state.currentSession.messages, message],
+      },
+    })),
+
+  updateLastAssistantMessage: (content) =>
+    set((state) => {
+      const messages = [...state.currentSession.messages];
+      const lastIdx = messages.length - 1;
+      if (lastIdx >= 0 && messages[lastIdx].role === 'assistant') {
+        messages[lastIdx] = { ...messages[lastIdx], content };
+      }
+      return {
+        currentSession: { ...state.currentSession, messages },
+      };
+    }),
+
+  setIsStreaming: (streaming) =>
+    set((state) => ({
+      currentSession: { ...state.currentSession, isStreaming: streaming },
+    })),
+
+  setProcessId: (processId) =>
+    set((state) => ({
+      currentSession: { ...state.currentSession, processId },
+    })),
+
+  // Sessions list
+  setSessions: (sessions) => set({ sessions }),
+
+  // Panels
+  togglePanel: (panel) =>
+    set((state) => ({
+      panels: { ...state.panels, [panel]: !state.panels[panel] },
+    })),
+
+  setPanel: (panel, open) =>
+    set((state) => ({
+      panels: { ...state.panels, [panel]: open },
+    })),
+
+  setPanelSize: (panel, size) =>
+    set((state) => ({
+      panelSizes: { ...state.panelSizes, [panel]: size },
+    })),
+
+  // Project
+  setCurrentProject: (project) =>
+    set((state) => ({
+      currentProject: {
+        ...state.currentProject,
+        ...project,
+        branch: project.branch || state.currentProject.branch,
+      },
+    })),
+
+  setBranch: (branch) =>
+    set((state) => ({
+      currentProject: { ...state.currentProject, branch },
+    })),
+
+  // Streaming
+  setStreamingContent: (content) => set({ streamingContent: content }),
+  appendStreamingContent: (content) =>
+    set((state) => ({
+      streamingContent: state.streamingContent + content,
+    })),
+  clearStreamingContent: () => set({ streamingContent: '' }),
+
+  // Tool activities
+  addToolActivity: (activity) =>
+    set((state) => ({
+      toolActivities: [...state.toolActivities, activity],
+    })),
+  updateToolActivity: (id, status) =>
+    set((state) => ({
+      toolActivities: state.toolActivities.map((a) =>
+        a.id === id ? { ...a, status } : a
+      ),
+    })),
+  clearToolActivities: () => set({ toolActivities: [], pendingQuestion: null }),
+
+  // Session runtime save/restore
+  saveCurrentRuntime: () => {
+    const state = get();
+    const key = state.currentSession.id || state.currentSession.processId;
+    if (!key) return;
+    // Only save if there's something worth saving (streaming or has a process)
+    if (!state.currentSession.isStreaming && !state.currentSession.processId) return;
+    const runtimes = new Map(state.sessionRuntimes);
+    runtimes.set(key, {
+      processId: state.currentSession.processId,
+      isStreaming: state.currentSession.isStreaming,
+      streamingContent: state.streamingContent,
+      toolActivities: [...state.toolActivities],
+      messages: [...state.currentSession.messages],
+    });
+    set({ sessionRuntimes: runtimes });
+  },
+
+  restoreRuntime: (sessionKey: string) => {
+    const state = get();
+    const runtime = state.sessionRuntimes.get(sessionKey);
+    if (!runtime) return false;
+    set({
+      currentSession: {
+        ...state.currentSession,
+        id: sessionKey,
+        processId: runtime.processId,
+        isStreaming: runtime.isStreaming,
+        messages: runtime.messages,
+      },
+      streamingContent: runtime.streamingContent,
+      toolActivities: runtime.toolActivities,
+    });
+    return true;
+  },
+
+  removeRuntime: (sessionKey: string) => {
+    const state = get();
+    const runtimes = new Map(state.sessionRuntimes);
+    runtimes.delete(sessionKey);
+    set({ sessionRuntimes: runtimes });
+  },
+
+  updateBackgroundRuntime: (processId: string, updater: (runtime: SessionRuntime) => SessionRuntime) => {
+    const state = get();
+    // Find which session key owns this processId
+    let targetKey: string | null = null;
+    for (const [key, runtime] of state.sessionRuntimes) {
+      if (runtime.processId === processId) {
+        targetKey = key;
+        break;
+      }
+    }
+    if (!targetKey) return;
+    const runtime = state.sessionRuntimes.get(targetKey)!;
+    const runtimes = new Map(state.sessionRuntimes);
+    runtimes.set(targetKey, updater(runtime));
+    set({ sessionRuntimes: runtimes });
+  },
+
+  getRunningSessionIds: () => {
+    const state = get();
+    const running: string[] = [];
+    // Check current session
+    if (state.currentSession.processId) {
+      if (state.currentSession.id) running.push(state.currentSession.id);
+    }
+    // Check cached runtimes
+    for (const [key, runtime] of state.sessionRuntimes) {
+      if (runtime.processId && !running.includes(key)) {
+        running.push(key);
+      }
+    }
+    return running;
+  },
+
+  findSessionKeyByProcessId: (processId: string) => {
+    const state = get();
+    // Check current session first
+    if (state.currentSession.processId === processId) {
+      return state.currentSession.id;
+    }
+    // Check cached runtimes
+    for (const [key, runtime] of state.sessionRuntimes) {
+      if (runtime.processId === processId) {
+        return key;
+      }
+    }
+    return null;
+  },
+
+  // Loading
+  setIsLoadingSession: (loading) => set({ isLoadingSession: loading }),
+
+  // Git
+  setGitStatus: (status) => set({ gitStatus: status }),
+
+  // Platform
+  setPlatform: (platform) => set({ platform }),
+
+  // Reveal file
+  setRevealFile: (filePath) => set({ revealFile: filePath }),
+
+  // AskUserQuestion
+  setPendingQuestion: (q) => set({ pendingQuestion: q }),
+  markQuestionAnswered: () =>
+    set((state) => ({
+      pendingQuestion: state.pendingQuestion
+        ? { ...state.pendingQuestion, answered: true }
+        : null,
+    })),
+
+  // Pending projects
+  addPendingProject: (project) =>
+    set((state) => {
+      // Don't add if already exists
+      if (state.pendingProjects.some((p) => p.path === project.path)) return state;
+      return { pendingProjects: [...state.pendingProjects, project] };
+    }),
+  removePendingProject: (path) =>
+    set((state) => ({
+      pendingProjects: state.pendingProjects.filter((p) => p.path !== path),
+    })),
+}));

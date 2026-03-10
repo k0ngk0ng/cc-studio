@@ -1,0 +1,671 @@
+@import "tailwindcss";
+@import "diff2html/bundles/css/diff2html.min.css";
+
+/* ─── Dark theme (default) ─────────────────────────────────────────── */
+@theme {
+  --color-bg: #1a1a1a;
+  --color-sidebar: #141414;
+  --color-surface: #242424;
+  --color-surface-hover: #2a2a2a;
+  --color-surface-active: #303030;
+  --color-accent: #e87b35;
+  --color-accent-hover: #f08c46;
+  --color-accent-muted: rgba(232, 123, 53, 0.15);
+  --color-text-primary: #f5f5f5;
+  --color-text-secondary: #b8b8b8;
+  --color-text-muted: #737373;
+  --color-border: #2e2e2e;
+  --color-border-light: #383838;
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+  --color-error: #f87171;
+  --color-info: #60a5fa;
+  --color-user-bubble: #332a22;
+  --color-assistant-bubble: #1e1e1e;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", Menlo, Courier, monospace;
+}
+
+/* ─── Light theme overrides ────────────────────────────────────────── */
+html.light {
+  --color-bg: #f5f5f5;
+  --color-sidebar: #eaeaea;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f0f0f0;
+  --color-surface-active: #e5e5e5;
+  --color-accent: #d4691a;
+  --color-accent-hover: #c05e15;
+  --color-accent-muted: rgba(212, 105, 26, 0.12);
+  --color-text-primary: #1a1a1a;
+  --color-text-secondary: #555555;
+  --color-text-muted: #888888;
+  --color-border: #d4d4d4;
+  --color-border-light: #e0e0e0;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+  --color-user-bubble: #fff3eb;
+  --color-assistant-bubble: #f9f9f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--ui-font-family, var(--font-sans));
+  font-size: var(--ui-font-size, 14px);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-active);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Draggable region for frameless window */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Markdown content styles */
+.markdown-content {
+  line-height: 1.7;
+}
+
+.markdown-content p {
+  margin: 0.5em 0;
+}
+
+.markdown-content p:first-child {
+  margin-top: 0;
+}
+
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content pre {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0.75em 0;
+  font-family: var(--editor-font-family, var(--font-mono));
+  font-size: var(--editor-font-size, 13px);
+}
+
+.markdown-content code {
+  font-family: var(--editor-font-family, var(--font-mono));
+  font-size: var(--editor-font-size, 13px);
+}
+
+.markdown-content :not(pre) > code {
+  background: var(--color-surface-active);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.markdown-content ul, .markdown-content ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.markdown-content li {
+  margin: 0.25em 0;
+}
+
+.markdown-content blockquote {
+  border-left: 3px solid var(--color-accent);
+  margin: 0.75em 0;
+  padding: 0.25em 1em;
+  color: var(--color-text-secondary);
+}
+
+.markdown-content h1, .markdown-content h2, .markdown-content h3,
+.markdown-content h4, .markdown-content h5, .markdown-content h6 {
+  margin: 1em 0 0.5em;
+  font-weight: 600;
+}
+
+.markdown-content h1 { font-size: 1.4em; }
+.markdown-content h2 { font-size: 1.2em; }
+.markdown-content h3 { font-size: 1.1em; }
+
+.markdown-content table {
+  border-collapse: collapse;
+  margin: 0.75em 0;
+  width: 100%;
+}
+
+.markdown-content th, .markdown-content td {
+  border: 1px solid var(--color-border);
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.markdown-content th {
+  background: var(--color-surface);
+  font-weight: 600;
+}
+
+.markdown-content a {
+  color: var(--color-accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.markdown-content a:hover {
+  text-decoration: underline;
+}
+
+/* Streaming cursor styles */
+
+/* Terminal: blinking underscore */
+@keyframes terminal-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.terminal-cursor {
+  color: var(--color-accent);
+  font-family: monospace;
+  font-weight: bold;
+  animation: terminal-blink 0.8s step-end infinite;
+  text-shadow: 0 0 4px var(--color-accent);
+}
+
+/* Scan line: sweeping bar */
+@keyframes scan-sweep {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
+.scan-line-bar {
+  animation: scan-sweep 1s ease-in-out infinite;
+}
+
+/* Classic: smooth pulsing vertical bar */
+@keyframes classic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.classic-cursor {
+  color: var(--color-accent);
+  font-weight: 300;
+  animation: classic-pulse 1.2s ease-in-out infinite;
+}
+
+/* Typewriter: subtle bounce */
+.typewriter-cursor {
+  text-shadow: 0 0 4px var(--color-accent);
+}
+
+/* Heartbeat: ECG pulse sweep */
+@keyframes heartbeat-sweep {
+  0% { clip-path: inset(0 100% 0 0); }
+  100% { clip-path: inset(0 0 0 0); }
+}
+.heartbeat-line {
+  animation: heartbeat-sweep 1.2s linear infinite;
+}
+
+/* Diff styles */
+.d2h-wrapper {
+  font-family: var(--editor-font-family, var(--font-mono));
+  font-size: var(--editor-font-size, 12px);
+}
+
+.d2h-file-header {
+  background: var(--color-surface) !important;
+  border-color: var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.d2h-code-line {
+  color: var(--color-text-primary) !important;
+}
+
+.d2h-code-side-line {
+  background: var(--color-bg) !important;
+}
+
+/* GitHub-style diff line colors for diff2html */
+.diff-view-container .d2h-ins,
+.diff-view-container .d2h-ins .d2h-code-line-ctn {
+  background-color: rgba(46, 160, 67, 0.15) !important;
+}
+
+.diff-view-container .d2h-del,
+.diff-view-container .d2h-del .d2h-code-line-ctn {
+  background-color: rgba(248, 81, 73, 0.15) !important;
+}
+
+.diff-view-container .d2h-ins .d2h-code-line-ctn {
+  color: #3fb950 !important;
+}
+
+.diff-view-container .d2h-del .d2h-code-line-ctn {
+  color: #f85149 !important;
+}
+
+/* Inline word-level highlights */
+.diff-view-container .d2h-ins ins,
+.diff-view-container .d2h-code-line-ctn ins {
+  background-color: rgba(46, 160, 67, 0.4) !important;
+  text-decoration: none !important;
+}
+
+.diff-view-container .d2h-del del,
+.diff-view-container .d2h-code-line-ctn del {
+  background-color: rgba(248, 81, 73, 0.4) !important;
+  text-decoration: none !important;
+}
+
+/* Hunk header */
+.diff-view-container .d2h-info {
+  background: var(--color-surface) !important;
+  color: var(--color-info) !important;
+  border-color: var(--color-border) !important;
+}
+
+/* Line numbers */
+.diff-view-container .d2h-code-linenumber {
+  background: var(--color-bg) !important;
+  border-color: var(--color-border) !important;
+  color: var(--color-text-muted) !important;
+}
+
+.diff-view-container .d2h-ins .d2h-code-linenumber {
+  background-color: rgba(46, 160, 67, 0.1) !important;
+  color: var(--color-text-muted) !important;
+}
+
+.diff-view-container .d2h-del .d2h-code-linenumber {
+  background-color: rgba(248, 81, 73, 0.1) !important;
+  color: var(--color-text-muted) !important;
+}
+
+/* Remove max-height constraint — let parent scroll */
+.diff-view-container .d2h-wrapper,
+.diff-view-container .d2h-file-wrapper {
+  margin: 0 !important;
+}
+
+.diff-view-container .d2h-file-diff {
+  overflow: visible !important;
+}
+
+/* Fallback raw diff line styles */
+.diff-line-add {
+  background-color: rgba(46, 160, 67, 0.15);
+  color: #3fb950;
+}
+
+.diff-line-del {
+  background-color: rgba(248, 81, 73, 0.15);
+  color: #f85149;
+}
+
+.diff-line-hunk {
+  background-color: rgba(56, 139, 253, 0.1);
+  color: var(--color-info);
+}
+
+.diff-line-meta {
+  color: var(--color-text-muted);
+}
+
+/* Light theme diff overrides */
+html.light .diff-view-container .d2h-ins,
+html.light .diff-view-container .d2h-ins .d2h-code-line-ctn {
+  background-color: rgba(46, 160, 67, 0.12) !important;
+}
+
+html.light .diff-view-container .d2h-del,
+html.light .diff-view-container .d2h-del .d2h-code-line-ctn {
+  background-color: rgba(248, 81, 73, 0.12) !important;
+}
+
+html.light .diff-view-container .d2h-ins .d2h-code-line-ctn {
+  color: #1a7f37 !important;
+}
+
+html.light .diff-view-container .d2h-del .d2h-code-line-ctn {
+  color: #cf222e !important;
+}
+
+html.light .diff-view-container .d2h-ins ins,
+html.light .diff-view-container .d2h-code-line-ctn ins {
+  background-color: rgba(46, 160, 67, 0.3) !important;
+}
+
+html.light .diff-view-container .d2h-del del,
+html.light .diff-view-container .d2h-code-line-ctn del {
+  background-color: rgba(248, 81, 73, 0.3) !important;
+}
+
+html.light .diff-line-add {
+  background-color: rgba(46, 160, 67, 0.12);
+  color: #1a7f37;
+}
+
+html.light .diff-line-del {
+  background-color: rgba(248, 81, 73, 0.12);
+  color: #cf222e;
+}
+
+/* Side-by-side diff modal styles */
+.diff-viewer-modal .d2h-file-list-wrapper {
+  display: none !important;
+}
+
+.diff-viewer-modal .d2h-file-header {
+  display: none !important;
+}
+
+.diff-viewer-modal .diff-view-container {
+  height: 100%;
+  overflow: hidden;
+}
+
+.diff-viewer-modal .d2h-wrapper {
+  height: 100%;
+}
+
+.diff-viewer-modal .d2h-file-wrapper {
+  border: none !important;
+  margin: 0 !important;
+  height: 100%;
+}
+
+.diff-viewer-modal .d2h-file-diff {
+  height: 100%;
+  overflow: hidden !important;
+}
+
+.diff-viewer-modal .d2h-files-diff {
+  display: flex !important;
+  height: 100%;
+}
+
+.diff-viewer-modal .d2h-file-side-diff {
+  flex: 1 !important;
+  overflow: auto !important;
+  width: 50% !important;
+  height: 100% !important;
+}
+
+/* Dark theme backgrounds */
+.diff-viewer-modal .d2h-code-wrapper {
+  background: var(--color-bg) !important;
+}
+
+.diff-viewer-modal .d2h-code-side-emptyplaceholder {
+  background: var(--color-surface) !important;
+  border-color: var(--color-border) !important;
+}
+
+/* Sticky line numbers — stay visible during horizontal scroll */
+.diff-viewer-modal .d2h-code-side-linenumber {
+  position: sticky !important;
+  left: 0 !important;
+  z-index: 1 !important;
+  background: var(--color-bg) !important;
+}
+
+.diff-viewer-modal .d2h-ins .d2h-code-side-linenumber {
+  background: rgba(46, 160, 67, 0.1) !important;
+}
+
+.diff-viewer-modal .d2h-del .d2h-code-side-linenumber {
+  background: rgba(248, 81, 73, 0.1) !important;
+}
+
+.diff-viewer-modal .d2h-info .d2h-code-side-linenumber,
+.diff-viewer-modal td.d2h-info {
+  position: sticky !important;
+  left: 0 !important;
+  z-index: 1 !important;
+}
+
+/* Transition utilities */
+.panel-transition {
+  transition: all 200ms ease-in-out;
+}
+
+/* Search highlights */
+mark.search-highlight {
+  background-color: rgba(255, 200, 0, 0.3);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+
+mark.search-highlight.search-active {
+  background-color: rgba(255, 160, 0, 0.6);
+  outline: 1px solid rgba(255, 160, 0, 0.8);
+}
+
+html.light mark.search-highlight {
+  background-color: rgba(255, 200, 0, 0.4);
+}
+
+html.light mark.search-highlight.search-active {
+  background-color: rgba(255, 160, 0, 0.5);
+  outline: 1px solid rgba(255, 160, 0, 0.7);
+}
+
+/* ─── highlight.js theme (dark) ───────────────────────────────────── */
+.hljs {
+  color: #c9d1d9;
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-type {
+  color: #ff7b72;
+}
+
+.hljs-literal,
+.hljs-number,
+.hljs-tag .hljs-attr,
+.hljs-template-variable,
+.hljs-variable {
+  color: #79c0ff;
+}
+
+.hljs-string,
+.hljs-doctag,
+.hljs-regexp {
+  color: #a5d6ff;
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_ {
+  color: #d2a8ff;
+}
+
+.hljs-built_in,
+.hljs-builtin-name {
+  color: #ffa657;
+}
+
+.hljs-attr,
+.hljs-attribute {
+  color: #79c0ff;
+}
+
+.hljs-meta {
+  color: #79c0ff;
+}
+
+.hljs-section,
+.hljs-name {
+  color: #7ee787;
+}
+
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: #ffa657;
+}
+
+.hljs-subst {
+  color: #c9d1d9;
+}
+
+.hljs-deletion {
+  color: #ffdcd7;
+  background-color: rgba(248, 81, 73, 0.15);
+}
+
+.hljs-addition {
+  color: #aff5b4;
+  background-color: rgba(46, 160, 67, 0.15);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+/* ─── highlight.js theme (light) ──────────────────────────────────── */
+html.light .hljs {
+  color: #24292f;
+}
+
+html.light .hljs-comment,
+html.light .hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+
+html.light .hljs-keyword,
+html.light .hljs-selector-tag,
+html.light .hljs-type {
+  color: #cf222e;
+}
+
+html.light .hljs-literal,
+html.light .hljs-number,
+html.light .hljs-tag .hljs-attr,
+html.light .hljs-template-variable,
+html.light .hljs-variable {
+  color: #0550ae;
+}
+
+html.light .hljs-string,
+html.light .hljs-doctag,
+html.light .hljs-regexp {
+  color: #0a3069;
+}
+
+html.light .hljs-title,
+html.light .hljs-title.class_,
+html.light .hljs-title.function_ {
+  color: #8250df;
+}
+
+html.light .hljs-built_in,
+html.light .hljs-builtin-name {
+  color: #953800;
+}
+
+html.light .hljs-attr,
+html.light .hljs-attribute {
+  color: #0550ae;
+}
+
+html.light .hljs-meta {
+  color: #0550ae;
+}
+
+html.light .hljs-section,
+html.light .hljs-name {
+  color: #116329;
+}
+
+html.light .hljs-symbol,
+html.light .hljs-bullet,
+html.light .hljs-link {
+  color: #953800;
+}
+
+html.light .hljs-subst {
+  color: #24292f;
+}
+
+html.light .hljs-deletion {
+  color: #82071e;
+  background-color: rgba(255, 129, 130, 0.15);
+}
+
+html.light .hljs-addition {
+  color: #116329;
+  background-color: rgba(46, 160, 67, 0.15);
+}
+
+/* ─── Utility: hide scrollbar ─────────────────────────────────────── */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─── Shake animation (lock overlay wrong password) ──────────────── */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.animate-indeterminate {
+  animation: indeterminate 1.5s ease-in-out infinite;
+}

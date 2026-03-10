@@ -1,0 +1,193 @@
+import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { useSettingsStore } from '../../stores/settingsStore';
+import type { SettingsTab } from '../../types';
+
+interface NavItem {
+  id: SettingsTab;
+  labelKey: string;
+  icon: React.ReactNode;
+}
+
+const navItems: NavItem[] = [
+  {
+    id: 'general',
+    labelKey: 'settings.general',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M8 10a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" strokeWidth="1.5" />
+        <path
+          d="M13.5 8a5.5 5.5 0 01-.44 2.16l1.13.65-.75 1.3-1.13-.65A5.5 5.5 0 018 13.5v1.3h-1.5v-1.3a5.5 5.5 0 01-3.81-2.04l-1.13.65-.75-1.3 1.13-.65A5.5 5.5 0 012.5 8c0-.76.16-1.48.44-2.16l-1.13-.65.75-1.3 1.13.65A5.5 5.5 0 018 2.5V1.2h1.5v1.3a5.5 5.5 0 013.81 2.04l1.13-.65.75 1.3-1.13.65c.28.68.44 1.4.44 2.16z"
+          stroke="currentColor"
+          strokeWidth="1.2"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: 'codex-cli',
+    labelKey: 'settings.codexCli',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
+        <path d="M4.5 6l2 1.5-2 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M8 10h3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    id: 'permissions',
+    labelKey: 'settings.permissions',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path
+          d="M8 1.5L3 4v4c0 3.5 2.1 6.2 5 7.5 2.9-1.3 5-4 5-7.5V4L8 1.5z"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+        />
+        <path d="M6 8l1.5 1.5L10 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
+  {
+    id: 'skills',
+    labelKey: 'settings.skills',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M4 2.5l8 5.5-8 5.5V2.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
+  {
+    id: 'commands',
+    labelKey: 'settings.commands',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M4.5 6l2 1.5-2 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M8 10h3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
+      </svg>
+    ),
+  },
+  {
+    id: 'mcp-servers',
+    labelKey: 'settings.mcpServers',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <rect x="2" y="3" width="12" height="4" rx="1" stroke="currentColor" strokeWidth="1.3" />
+        <rect x="2" y="9" width="12" height="4" rx="1" stroke="currentColor" strokeWidth="1.3" />
+        <circle cx="4.5" cy="5" r="0.75" fill="currentColor" />
+        <circle cx="4.5" cy="11" r="0.75" fill="currentColor" />
+      </svg>
+    ),
+  },
+  {
+    id: 'appearance',
+    labelKey: 'settings.appearance',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path
+          d="M8 2a6 6 0 100 12 1 1 0 001-1v-.5a1 1 0 011-1h1.5A2.5 2.5 0 0014 9a6 6 0 00-6-7z"
+          stroke="currentColor"
+          strokeWidth="1.3"
+        />
+        <circle cx="5.5" cy="6.5" r="1" fill="currentColor" />
+        <circle cx="8" cy="5" r="1" fill="currentColor" />
+        <circle cx="10.5" cy="6.5" r="1" fill="currentColor" />
+      </svg>
+    ),
+  },
+  {
+    id: 'keybindings',
+    labelKey: 'settings.keybindings',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <rect x="1.5" y="4" width="13" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+        <path d="M4 7h1M7.5 7h1M11 7h1M5 9.5h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    id: 'account',
+    labelKey: 'settings.account',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <circle cx="8" cy="5" r="3" stroke="currentColor" strokeWidth="1.3" />
+        <path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    id: 'archived',
+    labelKey: 'settings.archivedThreads',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M13 4.5H3a1 1 0 00-1 1v8a1 1 0 001 1h10a1 1 0 001-1v-8a1 1 0 00-1-1z" stroke="currentColor" strokeWidth="1.2" />
+        <path d="M2 4.5l1.5 9h9l1.5-9" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+        <path d="M6 4.5V3.5a1 1 0 011-1h2a1 1 0 011 1v1" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    ),
+  },
+  {
+    id: 'remote',
+    labelKey: 'settings.remoteControl',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <rect x="4" y="1.5" width="8" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+        <circle cx="8" cy="11.5" r="0.75" fill="currentColor" />
+        <line x1="6" y1="4" x2="10" y2="4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+];
+
+export function SettingsNav() {
+  const { t } = useTranslation();
+  const { activeTab, setActiveTab } = useSettingsStore();
+
+  return (
+    <nav className="flex-1 overflow-y-auto px-3">
+      <div className="space-y-0.5">
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setActiveTab(item.id)}
+            className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm
+                        transition-colors duration-150 titlebar-no-drag
+                        ${
+                          activeTab === item.id
+                            ? 'bg-surface text-text-primary'
+                            : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+                        }`}
+          >
+            <span className="shrink-0 opacity-80">{item.icon}</span>
+            <span>{t(item.labelKey)}</span>
+          </button>
+        ))}
+
+        {/* Separator + About */}
+        <div className="border-t border-border my-2" />
+        <button
+          onClick={() => setActiveTab('about')}
+          className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm
+                      transition-colors duration-150 titlebar-no-drag
+                      ${
+                        activeTab === 'about'
+                          ? 'bg-surface text-text-primary'
+                          : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+                      }`}
+        >
+          <span className="shrink-0 opacity-80">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M8 7v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <circle cx="8" cy="5" r="0.75" fill="currentColor" />
+            </svg>
+          </span>
+          <span>{t('settings.about')}</span>
+        </button>
+      </div>
+    </nav>
+  );
+}

@@ -1,0 +1,625 @@
+// ─── API types exposed via preload ──────────────────────────────────
+
+export interface McpServer {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+}
+
+export interface McpAPI {
+  getRunningServers: () => Promise<Array<{ id: string; name: string; uptime: number }>>;
+}
+
+export interface CodexAPI {
+  spawn: (cwd: string, sessionId?: string, permissionMode?: string, envVars?: Array<{ key: string; value: string; enabled: boolean }>, language?: string, mcpServers?: McpServer[], includeCoAuthoredBy?: boolean) => Promise<string>;
+  send: (processId: string, content: string) => Promise<boolean>;
+  kill: (processId: string) => Promise<boolean>;
+  onMessage: (callback: (processId: string, message: CodexStreamEvent) => void) => void;
+  removeMessageListener: (callback: (processId: string, message: CodexStreamEvent) => void) => void;
+  onPermissionRequest: (callback: (processId: string, request: PermissionRequestEvent) => void) => void;
+  removePermissionRequestListener: (callback: (processId: string, request: PermissionRequestEvent) => void) => void;
+  respondToPermission: (processId: string, requestId: string, response: { behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown>; message?: string }) => Promise<boolean>;
+  setPermissionMode: (processId: string, mode: string) => Promise<boolean>;
+}
+
+export interface PermissionRequestEvent {
+  requestId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+export interface SessionsAPI {
+  list: () => Promise<SessionInfo[]>;
+  getMessages: (projectPath: string, sessionId: string) => Promise<RawMessage[]>;
+  listProjects: () => Promise<ProjectInfo[]>;
+  fork: (projectPath: string, sessionId: string, cutoffUuid: string) => Promise<string | null>;
+  archive: (projectPath: string, sessionId: string) => Promise<boolean>;
+  unarchive: (archivedSessionId: string) => Promise<boolean>;
+  listArchived: () => Promise<ArchivedSessionInfo[]>;
+  onSessionsChanged: (callback: () => void) => void;
+  removeSessionsChangedListener: (callback: () => void) => void;
+}
+
+export interface GitAPI {
+  status: (cwd: string) => Promise<GitStatus>;
+  diff: (cwd: string, file?: string, staged?: boolean) => Promise<string>;
+  stage: (cwd: string, file: string) => Promise<void>;
+  unstage: (cwd: string, file: string) => Promise<void>;
+  discard: (cwd: string, file: string) => Promise<void>;
+  discardAll: (cwd: string) => Promise<void>;
+  commit: (cwd: string, message: string) => Promise<string>;
+  branch: (cwd: string) => Promise<string>;
+  listBranches: (cwd: string) => Promise<{ name: string; current: boolean }[]>;
+  checkout: (cwd: string, branch: string) => Promise<string>;
+  createBranch: (cwd: string, branch: string) => Promise<string>;
+  searchFiles: (cwd: string, query: string) => Promise<{ name: string; path: string }[]>;
+  listFiles: (cwd: string) => Promise<string[]>;
+  push: (cwd: string) => Promise<string>;
+  pushTags: (cwd: string) => Promise<string>;
+  log: (cwd: string, maxCount?: number) => Promise<GitCommit[]>;
+  showCommitFiles: (cwd: string, hash: string) => Promise<{ path: string; status: string }[]>;
+  showCommitFileDiff: (cwd: string, hash: string, file: string) => Promise<string>;
+}
+
+export interface TerminalAPI {
+  create: (cwd: string) => Promise<string | null>;
+  write: (id: string, data: string) => Promise<boolean>;
+  resize: (id: string, cols: number, rows: number) => Promise<boolean>;
+  kill: (id: string) => Promise<boolean>;
+  onData: (callback: (id: string, data: string) => void) => void;
+  removeDataListener: (callback: (id: string, data: string) => void) => void;
+  onExit: (callback: (id: string) => void) => void;
+  removeExitListener: (callback: (id: string) => void) => void;
+}
+
+export interface AppAPI {
+  getProjectPath: () => Promise<string>;
+  selectDirectory: () => Promise<string | null>;
+  getPlatform: () => Promise<'mac' | 'windows' | 'linux'>;
+  getHomePath: () => Promise<string>;
+  getVersion: () => Promise<string>;
+  getUpdateState: () => Promise<{
+    currentVersion: string;
+    latestVersion: string | null;
+    isUpdateAvailable: boolean;
+    isDownloaded: boolean;
+    autoDownloaded: boolean;
+  }>;
+  getModel: () => Promise<string>;
+  getCodexCliVersion: () => Promise<string>;
+  getGitVersion: () => Promise<string>;
+  getNodeVersion: () => Promise<string>;
+  getSystemLocale: () => Promise<string>;
+  installCodexCli: () => Promise<{ success: boolean; error?: string; message?: string }>;
+  installGit: () => Promise<{ success: boolean; error?: string; message?: string }>;
+  installNode: () => Promise<{ success: boolean; error?: string; message?: string }>;
+  openInEditor: (cwd: string, editor: string) => Promise<boolean>;
+  getAvailableEditors: () => Promise<{ id: string; name: string }[]>;
+  checkDependencies: () => Promise<DependencyStatus[]>;
+  checkRuntimeDeps: () => Promise<{ name: string; found: boolean; error?: string }[]>;
+  installRuntimeDeps: () => Promise<{ success: boolean; installed: string[]; error?: string }>;
+  onInstallProgress: (callback: (data: string) => void) => void;
+  removeInstallProgressListener: (callback: (data: string) => void) => void;
+  onNodeInstallProgress: (callback: (data: NodeInstallProgress) => void) => void;
+  removeNodeInstallProgressListener: (callback: (data: NodeInstallProgress) => void) => void;
+  toggleDevTools: () => Promise<void>;
+  showItemInFolder: (fullPath: string) => Promise<boolean>;
+  openFile: (fullPath: string) => Promise<boolean>;
+  openExternal: (url: string) => Promise<boolean>;
+  preventSleep: (prevent: boolean) => Promise<number | null>;
+  checkForUpdates: () => Promise<{
+    version: string;
+    tagName: string;
+    name: string;
+    body: string;
+    htmlUrl: string;
+    assets: { name: string; size: number; downloadUrl: string; cdnUrl?: string | null }[];
+  }>;
+  downloadUpdate: (platform: string) => Promise<void>;
+  installUpdate: () => Promise<boolean>;
+  onUpdateStatus: (callback: (data: {
+    state: string;
+    release?: any;
+    progress?: number;
+    downloaded?: number;
+    totalSize?: number;
+    message?: string;
+  }) => void) => void;
+  removeUpdateStatusListener: (callback: (data: any) => void) => void;
+  onDebugLog: (callback: (data: { category: string; message: string; detail?: string; level: string }) => void) => void;
+  removeDebugLogListener: (callback: (data: any) => void) => void;
+}
+
+export interface CodexConfigAPI {
+  read: () => Promise<Record<string, unknown>>;
+  write: (updates: Record<string, unknown>) => Promise<boolean>;
+}
+
+export interface SettingsFileAPI {
+  read: () => Promise<Record<string, unknown> | null>;
+  write: (data: Record<string, unknown>) => Promise<boolean>;
+}
+
+export interface SkillInfo {
+  name: string;           // directory name, e.g. "agent-browser"
+  description: string;    // from SKILL.md frontmatter
+  content: string;        // SKILL.md content
+  dirPath: string;        // absolute path to skill directory
+  filePath: string;       // absolute path to SKILL.md
+  hasTemplate: boolean;   // has CLAUDE.md.template
+  hasReferences: boolean; // has references/ directory
+}
+
+export interface CommandInfo {
+  name: string;           // filename without extension, e.g. "gen-image"
+  fileName: string;       // full filename, e.g. "gen-image.md"
+  type: 'md' | 'sh';     // file type
+  description: string;    // from frontmatter or first line
+  argumentHint: string;   // from frontmatter
+  content: string;        // full file content
+  filePath: string;       // absolute path
+}
+
+export interface SkillsAPI {
+  list: () => Promise<SkillInfo[]>;
+  read: (filePath: string) => Promise<string>;
+  create: (name: string, content: string) => Promise<boolean>;
+  update: (filePath: string, content: string) => Promise<boolean>;
+  remove: (dirPath: string) => Promise<boolean>;
+}
+
+export interface CommandsAPI {
+  list: () => Promise<CommandInfo[]>;
+  read: (filePath: string) => Promise<string>;
+  create: (fileName: string, content: string) => Promise<boolean>;
+  update: (filePath: string, content: string) => Promise<boolean>;
+  remove: (filePath: string) => Promise<boolean>;
+}
+
+// ─── Auth types ────────────────────────────────────────────────────
+
+export interface User {
+  id: string;
+  email: string;
+  username: string;
+  avatarUrl?: string | null;
+  createdAt: number;
+}
+
+export interface AuthResult {
+  success: boolean;
+  user?: User;
+  token?: string;
+  error?: string;
+}
+
+export interface AuthAPI {
+  register: (email: string, username: string, password: string) => Promise<AuthResult>;
+  login: (emailOrUsername: string, password: string) => Promise<AuthResult>;
+  logout: (token: string) => Promise<boolean>;
+  validate: (token: string) => Promise<AuthResult>;
+  updateProfile: (token: string, updates: Partial<Pick<User, 'username' | 'avatarUrl'>>) => Promise<AuthResult>;
+  changePassword: (token: string, oldPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  getSettings: (token: string) => Promise<Record<string, unknown>>;
+  setSettings: (token: string, key: string, value: unknown) => Promise<boolean>;
+  getServerUrl: () => Promise<string>;
+  getDefaultServerUrl: () => Promise<string>;
+  saveToken: (token: string) => Promise<boolean>;
+  loadToken: () => Promise<string | null>;
+  clearToken: () => Promise<boolean>;
+}
+
+export interface FileReadResult {
+  content?: string;
+  error?: string;
+  size?: number;
+}
+
+export interface FileAPI {
+  read: (filePath: string, maxSize?: number) => Promise<FileReadResult>;
+}
+
+export interface WindowAPI {
+  codex: CodexAPI;
+  sessions: SessionsAPI;
+  git: GitAPI;
+  terminal: TerminalAPI;
+  app: AppAPI;
+  file: FileAPI;
+  codexConfig: CodexConfigAPI;
+  settings: SettingsFileAPI;
+  skills: SkillsAPI;
+  commands: CommandsAPI;
+  auth: AuthAPI;
+  remote: RemoteAPI;
+  mcp: McpAPI;
+}
+
+export type NodeInstallProgress =
+  | { phase: 'downloading'; progress: number; downloaded: number; total: number }
+  | { phase: 'installing' }
+  | { phase: 'done' }
+  | { phase: 'error'; message: string };
+
+export interface DependencyStatus {
+  name: string;
+  found: boolean;
+  path?: string;
+  version?: string;
+  installHint: string;
+  npmAvailable?: boolean;
+}
+
+declare global {
+  interface Window {
+    api: WindowAPI;
+  }
+}
+
+// ─── Message types ──────────────────────────────────────────────────
+
+export interface ContentBlock {
+  type: string;
+  text?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  content?: string | ContentBlock[];
+  tool_use_id?: string;
+}
+
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  contentBlocks?: ContentBlock[];
+  timestamp: string;
+  toolUse?: ToolUseInfo[];
+  isStreaming?: boolean;
+  model?: string;
+  costUsd?: number;
+  durationMs?: number;
+}
+
+export interface ToolUseInfo {
+  name: string;
+  input: Record<string, unknown>;
+  result?: string;
+}
+
+export interface RawMessage {
+  type: string;
+  message?: {
+    role: string;
+    content: string | ContentBlock[];
+  };
+  timestamp?: string;
+  uuid?: string;
+  session_id?: string;
+}
+
+// ─── Session types ──────────────────────────────────────────────────
+
+export interface SessionInfo {
+  id: string;
+  projectPath: string;
+  projectName: string;
+  title: string;
+  lastMessage: string;
+  updatedAt: string;
+}
+
+export interface ArchivedSessionInfo {
+  id: string;
+  projectPath: string;
+  projectName: string;
+  title: string;
+  lastMessage: string;
+  archivedAt: string;
+  originalProjectPath: string;
+  originalSessionId: string;
+}
+
+export interface ProjectInfo {
+  name: string;
+  path: string;
+  encodedPath: string;
+}
+
+// ─── Git types ──────────────────────────────────────────────────────
+
+export interface FileChange {
+  path: string;
+  status: string;
+  statusLabel: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitStatus {
+  branch: string;
+  unstaged: FileChange[];
+  staged: FileChange[];
+}
+
+export interface GitCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+  date: string;
+}
+
+// ─── Codex stream event types ───────────────────────────────────────
+
+export interface CodexStreamEvent {
+  type: string;
+  subtype?: string;
+  session_id?: string;
+  message?: {
+    role: string;
+    content: string | ContentBlock[];
+    model?: string;
+    stop_reason?: string;
+  };
+  result?: {
+    content: string | ContentBlock[];
+    cost?: number;
+    duration_ms?: number;
+    session_id?: string;
+  };
+  code?: number;
+  signal?: string;
+}
+
+// ─── Settings types ─────────────────────────────────────────────────
+
+export type SettingsTab =
+  | 'general'
+  | 'codex-cli'
+  | 'permissions'
+  | 'skills'
+  | 'commands'
+  | 'mcp-servers'
+  | 'appearance'
+  | 'keybindings'
+  | 'remote'
+  | 'account'
+  | 'archived'
+  | 'about';
+
+export type ThemeMode = 'dark' | 'light' | 'system';
+export type PermissionMode = 'readOnly' | 'workspaceWrite' | 'fullAuto' | 'dangerFullAccess';
+export type AutoApproveLevel = PermissionMode; // backward compat alias
+export type SendKeyMode = 'enter' | 'cmd-enter';
+
+export interface GeneralSettings {
+  sendKey: SendKeyMode;
+  autoApprove: PermissionMode;
+  language: string;
+  uiLanguage: string;
+  notifyOnComplete: boolean;
+  preventSleep: boolean;
+  debugMode: boolean;
+  showArchivedThreads: boolean;
+}
+
+export interface ModelSettings {
+  maxTokens: number;
+  temperature: number;
+  systemPrompt: string;
+}
+
+export interface ProviderEnvVar {
+  key: string;
+  value: string;
+  enabled: boolean;
+}
+
+export interface CodexProfile {
+  id: string;
+  name: string;
+  envVars: ProviderEnvVar[];
+  includeCoAuthoredBy: boolean;
+  systemPrompt: string;
+  temperature: number;
+}
+
+export interface ProviderSettings {
+  maxTokens: number;
+  temperature: number;
+  systemPrompt: string;
+  // New: environment variable overrides
+  envVars: ProviderEnvVar[];
+  // Multi-profile support
+  profiles: CodexProfile[];
+  activeProfileId: string;
+}
+
+export interface PermissionSettings {
+  allowFileWrite: boolean;
+  allowFileRead: boolean;
+  allowBash: boolean;
+  allowMcp: boolean;
+  disallowedCommands: string[];
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+}
+
+export interface GitSettings {
+  autoStage: boolean;
+  showDiffOnCommit: boolean;
+  defaultCommitPrefix: string;
+  autoPush: boolean;
+}
+
+export type StreamingCursorStyle = 'pulse-dot' | 'terminal' | 'scan-line' | 'classic' | 'typewriter' | 'dna-helix' | 'heartbeat' | 'neon-flicker';
+
+export interface AppearanceSettings {
+  theme: ThemeMode;
+  fontSize: number;
+  fontFamily: string;
+  editorFontSize: number;
+  editorFontFamily: string;
+  showLineNumbers: boolean;
+  chatLayout: 'centered-sm' | 'centered' | 'centered-lg' | 'centered-xl' | 'full-width';
+  streamingCursor: StreamingCursorStyle;
+}
+
+export interface KeyBinding {
+  id: string;
+  label: string;
+  keys: string;
+  action: string;
+}
+
+export interface SecuritySettings {
+  lockPassword: string;          // 6-digit unlock password, default "666666"
+  allowRemoteControl: boolean;   // whether to allow mobile remote control
+  autoLockTimeout: number;       // ms delay before locking desktop after remote connect, 0=immediate
+}
+
+export interface ServerSettings {
+  serverUrl: string;
+}
+
+export type UpdateChannel = 'stable' | 'beta';
+export type AutoUpdateMode = 'prompt' | 'auto-download' | 'off';
+
+export interface UpdateSettings {
+  autoUpdate: AutoUpdateMode;      // auto-download = silent download, prompt = notify only, off = disable
+  updateChannel: UpdateChannel;    // stable or beta releases
+  autoCheckOnStartup: boolean;     // check for updates on app startup
+}
+
+export interface AppSettings {
+  general: GeneralSettings;
+  provider: ProviderSettings;
+  permissions: PermissionSettings;
+  mcpServers: McpServer[];
+  git: GitSettings;
+  appearance: AppearanceSettings;
+  keybindings: KeyBinding[];
+  security: SecuritySettings;
+  server: ServerSettings;
+  updates: UpdateSettings;
+}
+
+// ─── Remote control types ────────────────────────────────────────────
+
+export type ControlMode = 'local' | 'remote' | 'unlocking';
+
+export interface RemoteDesktopInfo {
+  desktopId: string;
+  deviceName: string;
+  online: boolean;
+  projectPath?: string;
+}
+
+export interface RemoteState {
+  // Connection
+  relayConnected: boolean;
+  pairingCode: string | null;
+  qrData: string | null;           // base64 QR data URL for display
+
+  // Paired devices
+  pairedDevices: PairedDevice[];
+
+  // Control state
+  controlMode: ControlMode;
+  controllingDeviceId: string | null;
+  controllingDeviceName: string | null;
+}
+
+export interface PairedDevice {
+  deviceId: string;
+  deviceName: string;
+  deviceType: 'mobile' | 'desktop';
+  pairedAt: number;
+  lastSeen?: number;
+}
+
+// ─── Remote protocol message types ──────────────────────────────────
+
+export interface RemoteCommand {
+  id: string;
+  channel: string;
+  args: unknown[];
+}
+
+export interface RemoteResponse {
+  id: string;
+  result?: unknown;
+  error?: string;
+}
+
+export interface RemoteEvent {
+  channel: string;
+  data: unknown;
+}
+
+// ─── Remote API (preload bridge) ────────────────────────────────────
+
+export interface RemoteAPI {
+  connect: (token: string) => Promise<boolean>;
+  disconnect: () => Promise<void>;
+  generatePairingQR: () => Promise<string | null>;   // returns QR data URL
+  revokePairing: (deviceId: string) => Promise<boolean>;
+  getPairedDevices: () => Promise<PairedDevice[]>;
+  unlock: (password: string) => Promise<boolean>;
+  getState: () => Promise<RemoteState>;
+  updateSettings: (settings: { lockPassword?: string; allowRemoteControl?: boolean; autoLockTimeout?: number }) => Promise<boolean>;
+
+  // Events
+  onStateChanged: (callback: (state: RemoteState) => void) => void;
+  removeStateChangedListener: (callback: (state: RemoteState) => void) => void;
+  onControlRequest: (callback: (deviceId: string, deviceName: string) => void) => void;
+  removeControlRequestListener: (callback: (deviceId: string, deviceName: string) => void) => void;
+}
+
+// ─── App state ──────────────────────────────────────────────────────
+
+export interface CurrentSession {
+  id: string | null;
+  processId: string | null;
+  projectPath: string;
+  title: string;
+  messages: Message[];
+  isStreaming: boolean;
+}
+
+export interface PanelState {
+  sidebar: boolean;
+  terminal: boolean;
+  diff: boolean;
+  logs: boolean;
+}
+
+export interface PanelSizes {
+  sidebar: number;   // width in px
+  terminal: number;  // height in px
+  diff: number;      // width in px
+}
+
+export interface AppState {
+  currentSession: CurrentSession;
+  sessions: SessionInfo[];
+  panels: PanelState;
+  currentProject: {
+    path: string;
+    name: string;
+    branch: string;
+  };
+  streamingContent: string;
+  gitStatus: GitStatus | null;
+  platform: 'mac' | 'windows' | 'linux';
+}

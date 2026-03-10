@@ -1,0 +1,109 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  desktop-package:
+    name: Desktop Package (${{ matrix.app }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [claude-studio, codex-studio]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.app }}
+        run: npm ci
+
+      - name: Sync version from git
+        working-directory: ${{ matrix.app }}
+        run: npm run version:sync
+
+      - name: Package app
+        working-directory: ${{ matrix.app }}
+        run: npm run package
+
+      - name: Upload packaged app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-${{ matrix.os }}
+          path: ${{ matrix.app }}/out/**
+          retention-days: 7
+
+  server-package:
+    name: Server Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Build server
+        working-directory: server
+        run: npm run build
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="$(git describe --tags --always --dirty | sed 's/^v//')"
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package server tarball
+        shell: bash
+        run: |
+          rm -rf server-package
+          mkdir -p server-package
+          cp -r server/dist server-package/
+          cp server/package.json server-package/
+          cp server/package-lock.json server-package/
+          cp server/admin.mjs server-package/
+          cp server/.env.example server-package/
+          cp server/cc-studio-server.service server-package/
+          cp server/deploy.sh server-package/
+          cp server/upgrade.sh server-package/
+          cp server/README.md server-package/
+          cd server-package
+          npm install --omit=dev
+          cd ..
+          tar -czf cc-studio-server-${{ steps.version.outputs.value }}.tar.gz -C server-package .
+
+      - name: Upload server tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-studio-server-${{ steps.version.outputs.value }}
+          path: cc-studio-server-${{ steps.version.outputs.value }}.tar.gz
+          retention-days: 7

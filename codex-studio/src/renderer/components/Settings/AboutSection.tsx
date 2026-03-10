@@ -1,0 +1,758 @@
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { debugLog } from '../../stores/debugLogStore';
+import { useUpdateStore } from '../../stores/updateStore';
+import { useSettingsStore } from '../../stores/settingsStore';
+import type { UpdateStatus } from '../../stores/updateStore';
+import type { NodeInstallProgress } from '../../types';
+import { SettingsSelect } from './controls/SettingsSelect';
+import { SettingsToggle } from './controls/SettingsToggle';
+
+interface ReleaseInfo {
+  version: string;
+  tagName: string;
+  name: string;
+  body: string;
+  htmlUrl: string;
+  assets: { name: string; size: number; downloadUrl: string; cdnUrl?: string | null }[];
+}
+
+type InstallStatus = 'idle' | 'installing' | 'success' | 'error';
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getPlatformAsset(assets: ReleaseInfo['assets'], platform: string): ReleaseInfo['assets'][0] | null {
+  if (platform === 'mac') {
+    return assets.find(a => a.name.endsWith('.dmg'))
+      || assets.find(a => a.name.includes('darwin') || a.name.includes('mac'))
+      || null;
+  } else if (platform === 'windows') {
+    // Squirrel.Windows produces "Setup.exe"; prefer that over .nupkg / RELEASES
+    return assets.find(a => a.name.toLowerCase().includes('setup') && a.name.endsWith('.exe'))
+      || assets.find(a => a.name.endsWith('.exe'))
+      || assets.find(a => a.name.endsWith('.msi'))
+      || assets.find(a => a.name.includes('win'))
+      || null;
+  } else {
+    return assets.find(a => a.name.endsWith('.deb'))
+      || assets.find(a => a.name.endsWith('.AppImage'))
+      || assets.find(a => a.name.endsWith('.rpm'))
+      || assets.find(a => a.name.includes('linux'))
+      || null;
+  }
+}
+
+// Spinning loader icon
+function Spinner({ className = '' }: { className?: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className={`animate-spin ${className}`}>
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5" className="text-border" />
+      <path d="M14 8a6 6 0 00-6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="text-accent" />
+    </svg>
+  );
+}
+
+// Check icon
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-success">
+      <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M5.5 8l2 2 3.5-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// Warning icon
+function WarningIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-warning">
+      <path d="M8 1.5L1 14h14L8 1.5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <path d="M8 6v4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="8" cy="12" r="0.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+interface VersionRowProps {
+  label: string;
+  sublabel: string;
+  version: string;
+  notFoundLabel?: string;
+  installStatus?: InstallStatus;
+  installError?: string;
+  installMessage?: string;
+  installProgress?: NodeInstallProgress | null;
+  onInstall?: () => void;
+}
+
+function VersionRow({
+  label,
+  sublabel,
+  version,
+  notFoundLabel,
+  installStatus,
+  installError,
+  installMessage,
+  installProgress,
+  onInstall,
+}: VersionRowProps) {
+  const isNotFound = version === 'not found' || version === 'not installed';
+  const isLoading = !version;
+
+  return (
+    <div className="py-1">
+      <div className="flex items-center justify-between">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-text-primary">{label}</div>
+          <div className="text-xs text-text-muted mt-0.5">{sublabel}</div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {isLoading ? (
+            <span className="text-sm font-mono text-text-muted">…</span>
+          ) : isNotFound ? (
+            <div className="flex items-center gap-2">
+              {installStatus !== 'success' && (
+                <span className="text-xs text-warning">{notFoundLabel || 'Not installed'}</span>
+              )}
+              {onInstall && installStatus === 'idle' && (
+                <button
+                  onClick={onInstall}
+                  className="px-2.5 py-1 rounded-md bg-accent text-white text-xs font-medium
+                             hover:bg-accent/90 transition-colors"
+                >
+                  Install
+                </button>
+              )}
+              {installStatus === 'installing' && !installProgress && (
+                <div className="flex items-center gap-1.5 text-xs text-text-muted">
+                  <Spinner />
+                  <span>Installing…</span>
+                </div>
+              )}
+              {installStatus === 'success' && (
+                <div className="flex items-center gap-1.5 text-xs text-success">
+                  <CheckIcon />
+                  <span>{installMessage || 'Installed'}</span>
+                </div>
+              )}
+              {installStatus === 'error' && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-error truncate max-w-[200px]" title={installError}>
+                    {installError || 'Failed'}
+                  </span>
+                  {onInstall && (
+                    <button
+                      onClick={onInstall}
+                      className="px-2 py-0.5 rounded text-xs text-text-muted hover:text-text-primary
+                                 border border-border hover:border-border-light transition-colors"
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <span className="text-sm font-mono text-text-muted">{version}</span>
+          )}
+        </div>
+      </div>
+      {/* Progress bar for downloading/installing */}
+      {installStatus === 'installing' && installProgress && (
+        <div className="mt-2">
+          {installProgress.phase === 'downloading' && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-text-muted">
+                <span>Downloading…</span>
+                <span className="font-mono">
+                  {installProgress.total > 0
+                    ? `${formatBytes(installProgress.downloaded)} / ${formatBytes(installProgress.total)}`
+                    : formatBytes(installProgress.downloaded)}
+                </span>
+              </div>
+              <div className="w-full h-1.5 rounded-full bg-surface overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-accent transition-all duration-300"
+                  style={{ width: `${installProgress.progress}%` }}
+                />
+              </div>
+              <div className="text-[11px] text-text-muted text-right">{Math.floor(installProgress.progress)}%</div>
+            </div>
+          )}
+          {installProgress.phase === 'installing' && (
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-xs text-text-muted">
+                <Spinner />
+                <span>Installing…</span>
+              </div>
+              <div className="w-full h-1.5 rounded-full bg-surface overflow-hidden">
+                <div className="h-full w-1/4 rounded-full bg-accent animate-indeterminate" />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function AboutSection() {
+  const [version, setVersion] = useState('');
+  const [codexCliVersion, setCodexCliVersion] = useState('');
+  const [gitVersion, setGitVersion] = useState('');
+  const [nodeVersion, setNodeVersion] = useState('');
+  const [platform, setPlatform] = useState('');
+  const [updateReady, setUpdateReady] = useState(false);  // Track if update is ready to install
+
+  // Settings store for update preferences
+  const { settings, updateUpdates } = useSettingsStore();
+
+  // Global update state — persists across page navigation
+  const { status: updateStatus, setStatus: setUpdateStatus, updateProgress } = useUpdateStore();
+
+  // Install states
+  const [codexCliInstall, setCodexCliInstall] = useState<{
+    status: InstallStatus;
+    error?: string;
+    message?: string;
+  }>({ status: 'idle' });
+  const [gitInstall, setGitInstall] = useState<{
+    status: InstallStatus;
+    error?: string;
+    message?: string;
+  }>({ status: 'idle' });
+  const [nodeInstall, setNodeInstall] = useState<{
+    status: InstallStatus;
+    error?: string;
+    message?: string;
+  }>({ status: 'idle' });
+  const [nodeInstallProgress, setNodeInstallProgress] = useState<NodeInstallProgress | null>(null);
+  const nodeProgressCallbackRef = useRef<((data: NodeInstallProgress) => void) | null>(null);
+  const lastReleaseRef = useRef<ReleaseInfo | null>(null);
+
+  useEffect(() => {
+    window.api.app.getVersion().then(setVersion).catch(() => {});
+    window.api.app.getCodexCliVersion().then(setCodexCliVersion).catch(() => {});
+    window.api.app.getGitVersion().then(setGitVersion).catch(() => {});
+    window.api.app.getNodeVersion().then(setNodeVersion).catch(() => {});
+    window.api.app.getPlatform().then(setPlatform).catch(() => {});
+
+    // Check if there's already an update downloaded (from auto-download)
+    window.api.app.getUpdateState().then((state) => {
+      if (state.isDownloaded || state.autoDownloaded) {
+        setUpdateReady(true);
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Update status listener — receives events from electron-updater via main process
+  useEffect(() => {
+    // Remember release info so we can show a manual download link on error
+    if (updateStatus.state === 'available' && updateStatus.release) {
+      lastReleaseRef.current = updateStatus.release;
+    }
+  }, [updateStatus]);
+
+  useEffect(() => {
+    const handleUpdateStatus = (data: {
+      state: string;
+      release?: any;
+      progress?: number;
+      downloaded?: number;
+      totalSize?: number;
+      message?: string;
+    }) => {
+      switch (data.state) {
+        case 'checking':
+          setUpdateStatus({ state: 'checking' });
+          break;
+        case 'available':
+          setUpdateStatus({ state: 'available', release: data.release });
+          break;
+        case 'up-to-date':
+          setUpdateStatus({ state: 'up-to-date' });
+          break;
+        case 'downloading':
+          setUpdateStatus({
+            state: 'downloading',
+            progress: data.progress || 0,
+            downloaded: data.downloaded || 0,
+            totalSize: data.totalSize || 0,
+          });
+          break;
+        case 'downloaded':
+          setUpdateStatus({ state: 'downloaded' });
+          setUpdateReady(true);
+          break;
+        case 'installing':
+          setUpdateStatus({ state: 'installing', step: data.message });
+          break;
+        case 'error':
+          setUpdateStatus({ state: 'error', message: data.message || 'Update failed' });
+          break;
+      }
+    };
+    window.api.app.onUpdateStatus(handleUpdateStatus);
+    return () => {
+      window.api.app.removeUpdateStatusListener(handleUpdateStatus);
+    };
+  }, []);
+
+  const handleCheckForUpdates = useCallback(async () => {
+    setUpdateStatus({ state: 'checking' });
+    debugLog('app', 'Checking for updates...');
+    try {
+      const release = await window.api.app.checkForUpdates();
+      if (!release) {
+        debugLog('app', 'Update check unavailable (no CDN or GitHub API access)');
+        setUpdateStatus({ state: 'error', message: 'Update check unavailable. Please check your network connection.' });
+        return;
+      }
+      debugLog('app', `Latest release: ${release.version} (${release.tagName})`, release);
+      if (!release.version || release.version === version) {
+        debugLog('app', `Already up to date: ${version}`);
+        setUpdateStatus({ state: 'up-to-date' });
+      } else {
+        const current = version.split('.').map(Number);
+        const latest = release.version.split('.').map(Number);
+        let isNewer = false;
+        for (let i = 0; i < 3; i++) {
+          if ((latest[i] || 0) > (current[i] || 0)) { isNewer = true; break; }
+          if ((latest[i] || 0) < (current[i] || 0)) break;
+        }
+        if (isNewer) {
+          debugLog('app', `New version available: ${version} → ${release.version}`);
+          setUpdateStatus({ state: 'available', release });
+        } else {
+          debugLog('app', `Already up to date: ${version} >= ${release.version}`);
+          setUpdateStatus({ state: 'up-to-date' });
+        }
+      }
+    } catch (err: any) {
+      debugLog('app', `Update check failed: ${err?.message}`, err, 'error');
+      setUpdateStatus({ state: 'error', message: err?.message || 'Failed to check for updates' });
+    }
+  }, [version]);
+
+  const handleDownload = useCallback(async () => {
+    if (updateStatus.state !== 'available') return;
+    // Trigger download - progress will come via event listener
+    setUpdateStatus({ state: 'downloading', progress: 0, downloaded: 0, totalSize: 0 });
+    try {
+      await window.api.app.downloadUpdate(platform);
+    } catch (err: any) {
+      debugLog('app', `Download failed: ${err?.message}`, err, 'error');
+      setUpdateStatus({ state: 'error', message: err?.message || 'Download failed' });
+    }
+  }, [updateStatus, platform]);
+
+  const handleInstall = useCallback(async () => {
+    // Allow install if update is downloaded or ready to install
+    if (updateStatus.state !== 'downloaded' && !updateReady) return;
+    // Show immediate feedback before the async IPC call
+    setUpdateStatus({ state: 'installing', step: 'Preparing…' });
+    // Quit and install - electron-updater will replace the app and restart
+    try {
+      await window.api.app.installUpdate();
+    } catch (err: any) {
+      debugLog('app', `Install failed: ${err?.message}`, err, 'error');
+      setUpdateStatus({ state: 'error', message: err?.message || 'Install failed' });
+    }
+  }, [updateStatus, updateReady]);
+
+  const handleInstallCodexCli = useCallback(async () => {
+    setCodexCliInstall({ status: 'installing' });
+    debugLog('app', 'Installing Codex CLI...');
+    try {
+      const result = await window.api.app.installCodexCli();
+      if (result.success) {
+        debugLog('app', 'Codex CLI installed successfully');
+        setCodexCliInstall({ status: 'success', message: result.message });
+        // Re-check version
+        const ver = await window.api.app.getCodexCliVersion();
+        setCodexCliVersion(ver);
+      } else {
+        debugLog('app', `Codex CLI install failed: ${result.error}`, result, 'error');
+        setCodexCliInstall({ status: 'error', error: result.error });
+      }
+    } catch (err: any) {
+      debugLog('app', `Codex CLI install error: ${err?.message}`, err, 'error');
+      setCodexCliInstall({ status: 'error', error: err?.message || 'Install failed' });
+    }
+  }, []);
+
+  const handleInstallGit = useCallback(async () => {
+    setGitInstall({ status: 'installing' });
+    debugLog('app', `Installing Git (${platform})...`);
+    try {
+      const result = await window.api.app.installGit();
+      if (result.success) {
+        debugLog('app', 'Git install triggered', result);
+        if (result.message) {
+          // For Mac (xcode-select) and Windows (browser), show the message
+          setGitInstall({ status: 'success', message: result.message });
+        } else {
+          setGitInstall({ status: 'success', message: 'Installed' });
+          // Re-check version
+          const ver = await window.api.app.getGitVersion();
+          setGitVersion(ver);
+        }
+      } else {
+        debugLog('app', `Git install failed: ${result.error}`, result, 'error');
+        setGitInstall({ status: 'error', error: result.error });
+      }
+    } catch (err: any) {
+      debugLog('app', `Git install error: ${err?.message}`, err, 'error');
+      setGitInstall({ status: 'error', error: err?.message || 'Install failed' });
+    }
+  }, [platform]);
+
+  const handleInstallNode = useCallback(async () => {
+    setNodeInstall({ status: 'installing' });
+    setNodeInstallProgress(null);
+    debugLog('app', `Installing Node.js (${platform})...`);
+
+    // Register progress listener
+    const progressCallback = (data: NodeInstallProgress) => {
+      setNodeInstallProgress(data);
+    };
+    nodeProgressCallbackRef.current = progressCallback;
+    window.api.app.onNodeInstallProgress(progressCallback);
+
+    try {
+      const result = await window.api.app.installNode();
+      if (result.success) {
+        debugLog('app', 'Node.js install triggered', result);
+        if (result.message) {
+          setNodeInstall({ status: 'success', message: result.message });
+        } else {
+          setNodeInstall({ status: 'success', message: 'Installed' });
+        }
+        // Re-check version
+        const ver = await window.api.app.getNodeVersion();
+        setNodeVersion(ver);
+      } else {
+        debugLog('app', `Node.js install failed: ${result.error}`, result, 'error');
+        setNodeInstall({ status: 'error', error: result.error });
+      }
+    } catch (err: any) {
+      debugLog('app', `Node.js install error: ${err?.message}`, err, 'error');
+      setNodeInstall({ status: 'error', error: err?.message || 'Install failed' });
+    } finally {
+      // Cleanup progress listener
+      if (nodeProgressCallbackRef.current) {
+        window.api.app.removeNodeInstallProgressListener(nodeProgressCallbackRef.current);
+        nodeProgressCallbackRef.current = null;
+      }
+      setNodeInstallProgress(null);
+    }
+  }, [platform]);
+
+  return (
+    <div>
+      <h2 className="text-lg font-semibold text-text-primary mb-1">About</h2>
+      <p className="text-sm text-text-muted mb-6">
+        Version information and updates.
+      </p>
+
+      <div className="space-y-6">
+        {/* App icon + name */}
+        <div className="flex items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="text-accent"
+              />
+            </svg>
+          </div>
+          <div>
+            <div className="text-lg font-semibold text-text-primary">CodexStudio</div>
+            <div className="text-sm text-text-muted">A desktop client for Codex CLI</div>
+          </div>
+        </div>
+
+        <div className="border-t border-border" />
+
+        {/* Version rows — ordered: App → Codex CLI → Git → Node.js */}
+        <div className="space-y-3">
+          <VersionRow
+            label="App Version"
+            sublabel="CodexStudio"
+            version={version}
+          />
+
+          <VersionRow
+            label="Codex CLI"
+            sublabel="@openai/codex"
+            version={codexCliVersion}
+            notFoundLabel="Not installed"
+            installStatus={codexCliInstall.status}
+            installError={codexCliInstall.error}
+            installMessage={codexCliInstall.message}
+            onInstall={handleInstallCodexCli}
+          />
+
+          <VersionRow
+            label="Git"
+            sublabel={platform === 'mac' ? 'Xcode Command Line Tools / Homebrew' : platform === 'windows' ? 'Git for Windows' : 'git'}
+            version={gitVersion}
+            notFoundLabel="Not installed"
+            installStatus={gitInstall.status}
+            installError={gitInstall.error}
+            installMessage={gitInstall.message}
+            onInstall={handleInstallGit}
+          />
+
+          <VersionRow
+            label="Node.js"
+            sublabel={platform === 'mac' ? 'nodejs.org' : 'nodejs.org'}
+            version={nodeVersion}
+            notFoundLabel="Not installed (v22 LTS recommended)"
+            installStatus={nodeInstall.status}
+            installError={nodeInstall.error}
+            installMessage={nodeInstall.message}
+            installProgress={nodeInstallProgress}
+            onInstall={handleInstallNode}
+          />
+        </div>
+
+        <div className="border-t border-border" />
+
+        {/* Update section */}
+        <div>
+          <div className="text-sm font-medium text-text-primary mb-3">Updates</div>
+
+          {/* Auto-update settings */}
+          <div className="space-y-3 mb-4 p-3 rounded-lg bg-surface border border-border">
+            <SettingsToggle
+              label="Auto-check on startup"
+              description="Automatically check for updates when the app starts"
+              checked={settings.updates?.autoCheckOnStartup ?? true}
+              onChange={(checked) => updateUpdates({ autoCheckOnStartup: checked })}
+            />
+            <SettingsSelect
+              label="Auto-update mode"
+              description="How to handle available updates"
+              value={settings.updates?.autoUpdate ?? 'auto-download'}
+              options={[
+                { value: 'auto-download', label: 'Auto-download patch updates' },
+                { value: 'prompt', label: 'Prompt for all updates' },
+                { value: 'off', label: 'Disable auto-check' },
+              ]}
+              onChange={(value) => updateUpdates({ autoUpdate: value as 'auto-download' | 'prompt' | 'off' })}
+            />
+          </div>
+
+          {/* Spacer removed — single "Install & Restart" button handles downloaded state */}
+
+          {updateStatus.state === 'idle' && (
+            <button
+              onClick={handleCheckForUpdates}
+              className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium
+                         hover:bg-accent/90 transition-colors"
+            >
+              Check for Updates
+            </button>
+          )}
+
+          {updateStatus.state === 'checking' && (
+            <div className="flex items-center gap-2 text-sm text-text-muted">
+              <Spinner />
+              Checking for updates…
+            </div>
+          )}
+
+          {updateStatus.state === 'up-to-date' && (
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm text-success">
+                <CheckIcon />
+                You're on the latest version
+              </div>
+              <button
+                onClick={handleCheckForUpdates}
+                className="text-xs text-text-muted hover:text-text-primary transition-colors"
+              >
+                Check again
+              </button>
+            </div>
+          )}
+
+          {updateStatus.state === 'available' && (
+            <div className="space-y-3">
+              <div className="p-3 rounded-lg bg-surface border border-border">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-medium text-text-primary">
+                    {updateStatus.release.name || `v${updateStatus.release.version}`}
+                  </span>
+                  <span className="text-xs font-mono text-accent">
+                    {version} → {updateStatus.release.version}
+                  </span>
+                </div>
+                {updateStatus.release.body && (
+                  <p className="text-xs text-text-muted mt-2 whitespace-pre-wrap line-clamp-4">
+                    {updateStatus.release.body}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDownload}
+                  className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium
+                             hover:bg-accent/90 transition-colors"
+                >
+                  Download & Install
+                </button>
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.api.app.openExternal(updateStatus.release.htmlUrl);
+                  }}
+                  className="text-xs text-text-muted hover:text-accent transition-colors"
+                >
+                  View on GitHub →
+                </a>
+              </div>
+            </div>
+          )}
+
+          {updateStatus.state === 'downloading' && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-text-muted">
+                  Downloading…
+                </span>
+                <span className="text-text-muted font-mono text-xs">
+                  {formatBytes(updateStatus.downloaded)} / {formatBytes(updateStatus.totalSize)}
+                </span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-surface overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-accent transition-all duration-300"
+                  style={{ width: `${updateStatus.progress}%` }}
+                />
+              </div>
+              <div className="text-xs text-text-muted text-right">{Math.floor(updateStatus.progress)}%</div>
+            </div>
+          )}
+
+          {updateStatus.state === 'downloaded' && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-success">
+                <CheckIcon />
+                Update ready — click to install and restart
+              </div>
+              <button
+                onClick={handleInstall}
+                className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium
+                           hover:bg-accent/90 transition-colors"
+              >
+                Install & Restart
+              </button>
+            </div>
+          )}
+
+          {updateStatus.state === 'installing' && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm text-text-muted">
+                <Spinner />
+                {updateStatus.step || 'Installing…'}
+              </div>
+              <div className="text-xs text-text-muted">
+                The app will restart automatically.
+              </div>
+            </div>
+          )}
+
+          {updateStatus.state === 'error' && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm text-error">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.2" />
+                  <path d="M6 6l4 4M10 6l-4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                </svg>
+                {updateStatus.message}
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleCheckForUpdates}
+                  className="text-xs text-text-muted hover:text-text-primary transition-colors"
+                >
+                  Try again
+                </button>
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const url = lastReleaseRef.current?.htmlUrl
+                      || 'https://github.com/k0ngk0ng/codex-studio/releases/latest';
+                    window.api.app.openExternal(url);
+                  }}
+                  className="text-xs text-text-muted hover:text-accent transition-colors"
+                >
+                  Manual download →
+                </a>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border" />
+
+        {/* Links */}
+        <div className="space-y-2">
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              window.api.app.openExternal('https://github.com/k0ngk0ng/codex-studio');
+            }}
+            className="flex items-center gap-2 text-sm text-text-secondary hover:text-accent transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M6 3H3.5A1.5 1.5 0 002 4.5v8A1.5 1.5 0 003.5 14h8a1.5 1.5 0 001.5-1.5V10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M9 2h5v5M14 2L7 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            GitHub Repository
+          </a>
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              window.api.app.openExternal('https://github.com/k0ngk0ng/codex-studio/releases');
+            }}
+            className="flex items-center gap-2 text-sm text-text-secondary hover:text-accent transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M6 3H3.5A1.5 1.5 0 002 4.5v8A1.5 1.5 0 003.5 14h8a1.5 1.5 0 001.5-1.5V10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M9 2h5v5M14 2L7 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            All Releases
+          </a>
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              window.api.app.openExternal('https://github.com/k0ngk0ng/codex-studio/issues');
+            }}
+            className="flex items-center gap-2 text-sm text-text-secondary hover:text-accent transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M6 3H3.5A1.5 1.5 0 002 4.5v8A1.5 1.5 0 003.5 14h8a1.5 1.5 0 001.5-1.5V10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M9 2h5v5M14 2L7 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Report an Issue
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}

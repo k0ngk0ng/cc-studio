@@ -1,0 +1,544 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useSettingsStore } from '../../stores/settingsStore';
+import type { McpServer } from '../../types';
+
+export function McpServersSection() {
+  const { t } = useTranslation();
+  const { settings, addMcpServer, updateMcpServer, removeMcpServer, toggleMcpServer, reloadSettings } =
+    useSettingsStore();
+
+  // Reload settings from file when component mounts (in case external changes were made)
+  useEffect(() => {
+    reloadSettings();
+  }, []);
+  const { mcpServers } = settings;
+  const [isAdding, setIsAdding] = useState(false);
+  const [addMode, setAddMode] = useState<'form' | 'paste'>('form');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingOriginal, setEditingOriginal] = useState<McpServer | null>(null);
+  const [editingArgs, setEditingArgs] = useState<string>('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pasteJson, setPasteJson] = useState('');
+
+  const [newServer, setNewServer] = useState({
+    name: '',
+    command: '',
+    args: '',
+    env: '',
+  });
+
+  const handleAdd = () => {
+    if (!newServer.name || !newServer.command) return;
+
+    const server: McpServer = {
+      id: crypto.randomUUID(),
+      name: newServer.name,
+      command: newServer.command,
+      args: newServer.args
+        .split(' ')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      env: newServer.env
+        ? Object.fromEntries(
+            newServer.env.split('\n').map((line) => {
+              const [key, ...rest] = line.split('=');
+              return [key.trim(), rest.join('=').trim()];
+            })
+          )
+        : {},
+      enabled: true,
+    };
+
+    addMcpServer(server);
+    setNewServer({ name: '', command: '', args: '', env: '' });
+    setIsAdding(false);
+  };
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const content = reader.result as string;
+        const parsed = JSON.parse(content);
+
+        // Support both Codex CLI format and simple array format
+        let servers: McpServer[] = [];
+
+        if (parsed.mcpServers) {
+          // Codex CLI format: { mcpServers: { "name": { command, args, env } } }
+          Object.entries(parsed.mcpServers).forEach(([name, config]: [string, any]) => {
+            servers.push({
+              id: crypto.randomUUID(),
+              name,
+              command: config.command || '',
+              args: Array.isArray(config.args) ? config.args : config.args?.split(' ') || [],
+              env: typeof config.env === 'object' ? config.env : {},
+              enabled: true,
+            });
+          });
+        } else if (Array.isArray(parsed)) {
+          // Simple array format: [{ name, command, args, env }]
+          servers = parsed.map((s: any) => ({
+            id: crypto.randomUUID(),
+            name: s.name || '',
+            command: s.command || '',
+            args: Array.isArray(s.args) ? s.args : s.args?.split(' ') || [],
+            env: typeof s.env === 'object' ? s.env : {},
+            enabled: true,
+          }));
+        }
+
+        // Add all imported servers
+        servers.forEach((server) => {
+          if (server.name && server.command) {
+            addMcpServer(server);
+          }
+        });
+
+        alert(t('mcpServers.importSuccess', { count: servers.length }));
+      } catch (err) {
+        alert(t('mcpServers.parseFailed', { error: err instanceof Error ? err.message : 'Unknown error' }));
+      }
+    };
+    reader.readAsText(file);
+
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handlePasteSubmit = () => {
+    if (!pasteJson.trim()) return;
+
+    try {
+      const parsed = JSON.parse(pasteJson);
+      let servers: McpServer[] = [];
+
+      if (parsed.mcpServers) {
+        // Codex CLI format: { mcpServers: { "name": { command, args, env } } }
+        Object.entries(parsed.mcpServers).forEach(([name, config]: [string, any]) => {
+          servers.push({
+            id: crypto.randomUUID(),
+            name,
+            command: config.command || '',
+            args: Array.isArray(config.args) ? config.args : config.args?.split(' ') || [],
+            env: typeof config.env === 'object' ? config.env : {},
+            enabled: true,
+          });
+        });
+      } else if (Array.isArray(parsed)) {
+        // Simple array format: [{ name, command, args, env }]
+        servers = parsed.map((s: any) => ({
+          id: crypto.randomUUID(),
+          name: s.name || '',
+          command: s.command || '',
+          args: Array.isArray(s.args) ? s.args : s.args?.split(' ') || [],
+          env: typeof s.env === 'object' ? s.env : {},
+          enabled: true,
+        }));
+      }
+
+      // Add all servers
+      servers.forEach((server) => {
+        if (server.name && server.command) {
+          addMcpServer(server);
+        }
+      });
+
+      setPasteJson('');
+      setIsAdding(false);
+      setAddMode('form');
+      alert(t('mcpServers.importSuccess', { count: servers.length }));
+    } catch (err) {
+      alert(t('mcpServers.invalidJson', { error: err instanceof Error ? err.message : 'Unknown error' }));
+    }
+  };
+
+  return (
+    <div>
+      <h2 className="text-lg font-semibold text-text-primary mb-1">{t('mcpServers.title')}</h2>
+      <p className="text-sm text-text-muted mb-6">
+        {t('mcpServers.description')}
+      </p>
+
+      {/* Server list */}
+      <div className="space-y-3 mb-6">
+        {mcpServers.length === 0 && !isAdding && (
+          <div className="text-center py-8 border border-dashed border-border rounded-lg">
+            <svg
+              width="32"
+              height="32"
+              viewBox="0 0 16 16"
+              fill="none"
+              className="mx-auto mb-3 text-text-muted"
+            >
+              <rect x="2" y="3" width="12" height="4" rx="1" stroke="currentColor" strokeWidth="1.3" />
+              <rect x="2" y="9" width="12" height="4" rx="1" stroke="currentColor" strokeWidth="1.3" />
+              <circle cx="4.5" cy="5" r="0.75" fill="currentColor" />
+              <circle cx="4.5" cy="11" r="0.75" fill="currentColor" />
+            </svg>
+            <p className="text-sm text-text-muted">{t('mcpServers.noServers')}</p>
+            <p className="text-xs text-text-muted mt-1">
+              {t('mcpServers.addServerHint')}
+            </p>
+          </div>
+        )}
+
+        {mcpServers.map((server) => (
+          <div
+            key={server.id}
+            className="border border-border rounded-lg p-4 bg-surface"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => toggleMcpServer(server.id)}
+                  className={`relative w-9 h-5 rounded-full transition-colors duration-200
+                    ${server.enabled ? 'bg-accent' : 'bg-surface-active'}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white
+                      transition-transform duration-200
+                      ${server.enabled ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
+                <div>
+                  <span className="text-sm font-medium text-text-primary">{server.name}</span>
+                  <span className="text-xs text-text-muted ml-2 font-mono">{server.command}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    if (editingId === server.id) {
+                      // Closing edit - save the edited args before closing
+                      updateMcpServer(server.id, {
+                        args: editingArgs.split(' ').filter(Boolean),
+                      });
+                      setEditingOriginal(null);
+                      setEditingArgs('');
+                      setEditingId(null);
+                    } else {
+                      // Opening edit - save original and initialize args input
+                      setEditingOriginal({ ...server });
+                      setEditingArgs(server.args.join(' '));
+                      setEditingId(server.id);
+                    }
+                  }}
+                  className="p-1.5 rounded text-text-muted hover:text-text-primary
+                             hover:bg-surface-hover transition-colors"
+                  title={t('mcpServers.edit')}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path
+                      d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z"
+                      stroke="currentColor"
+                      strokeWidth="1.3"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm(t('mcpServers.removeConfirm', { name: server.name }))) {
+                      removeMcpServer(server.id);
+                    }
+                  }}
+                  className="p-1.5 rounded text-text-muted hover:text-error
+                             hover:bg-surface-hover transition-colors"
+                  title={t('mcpServers.remove')}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path
+                      d="M4 4l8 8M12 4l-8 8"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Expanded edit view */}
+            {editingId === server.id && (
+              <div className="mt-3 pt-3 border-t border-border space-y-3">
+                <div>
+                  <label className="text-xs text-text-muted mb-1 block">{t('mcpServers.name')}</label>
+                  <input
+                    type="text"
+                    value={server.name}
+                    onChange={(e) => updateMcpServer(server.id, { name: e.target.value })}
+                    className="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm
+                               text-text-primary font-mono focus:outline-none focus:border-accent"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-text-muted mb-1 block">{t('mcpServers.command')}</label>
+                  <input
+                    type="text"
+                    value={server.command}
+                    onChange={(e) => updateMcpServer(server.id, { command: e.target.value })}
+                    className="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm
+                               text-text-primary font-mono focus:outline-none focus:border-accent"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-text-muted mb-1 block">{t('mcpServers.arguments')}</label>
+                  <input
+                    type="text"
+                    value={editingId === server.id ? editingArgs : server.args.join(' ')}
+                    onChange={(e) => setEditingArgs(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm
+                               text-text-primary font-mono focus:outline-none focus:border-accent"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-text-muted mb-1 block">
+                    {t('mcpServers.envVars')}
+                  </label>
+                  <textarea
+                    value={Object.entries(server.env).map(([k, v]) => `${k}=${v}`).join('\n')}
+                    onChange={(e) =>
+                      updateMcpServer(server.id, {
+                        env: Object.fromEntries(
+                          e.target.value.split('\n').map((line) => {
+                            const [key, ...rest] = line.split('=');
+                            return [key.trim(), rest.join('=').trim()];
+                          }).filter(([k]) => k)
+                        ),
+                      })
+                    }
+                    rows={2}
+                    className="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm
+                               text-text-primary font-mono focus:outline-none focus:border-accent resize-none"
+                  />
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => {
+                      // Save - parse args and save
+                      updateMcpServer(server.id, {
+                        args: editingArgs.split(' ').filter(Boolean),
+                      });
+                      setEditingOriginal(null);
+                      setEditingArgs('');
+                      setEditingId(null);
+                    }}
+                    className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm
+                               rounded-lg transition-colors"
+                  >
+                    {t('mcpServers.save')}
+                  </button>
+                  <button
+                    onClick={() => {
+                      // Cancel - restore original values
+                      if (editingOriginal) {
+                        updateMcpServer(server.id, {
+                          name: editingOriginal.name,
+                          command: editingOriginal.command,
+                          args: editingOriginal.args,
+                          env: editingOriginal.env,
+                        });
+                      }
+                      setEditingOriginal(null);
+                      setEditingArgs('');
+                      setEditingId(null);
+                    }}
+                    className="px-4 py-1.5 bg-surface-hover hover:bg-surface-active text-text-secondary
+                               text-sm rounded-lg transition-colors"
+                  >
+                    {t('mcpServers.cancel')}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Add new server form */}
+      {isAdding ? (
+        <div className="border border-border rounded-lg p-4 bg-surface space-y-3">
+          {/* Tab buttons */}
+          <div className="flex gap-1 border-b border-border pb-2 mb-2">
+            <button
+              onClick={() => setAddMode('form')}
+              className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
+                addMode === 'form'
+                  ? 'bg-accent text-white'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+              }`}
+            >
+              {t('mcpServers.manual')}
+            </button>
+            <button
+              onClick={() => setAddMode('paste')}
+              className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
+                addMode === 'paste'
+                  ? 'bg-accent text-white'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+              }`}
+            >
+              {t('mcpServers.pasteJson')}
+            </button>
+          </div>
+
+          {addMode === 'form' ? (
+            <>
+              <h3 className="text-sm font-medium text-text-primary">{t('mcpServers.addMcpServer')}</h3>
+              <div>
+                <label className="text-xs text-text-muted mb-1 block">{t('mcpServers.name')}</label>
+                <input
+                  type="text"
+                  value={newServer.name}
+                  onChange={(e) => setNewServer({ ...newServer, name: e.target.value })}
+                  placeholder="e.g., filesystem"
+                  className="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm
+                             text-text-primary focus:outline-none focus:border-accent"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-text-muted mb-1 block">{t('mcpServers.command')}</label>
+                <input
+                  type="text"
+                  value={newServer.command}
+                  onChange={(e) => setNewServer({ ...newServer, command: e.target.value })}
+                  placeholder="e.g., npx"
+                  className="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm
+                             text-text-primary font-mono focus:outline-none focus:border-accent"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-text-muted mb-1 block">{t('mcpServers.arguments')}</label>
+                <input
+                  type="text"
+                  value={newServer.args}
+                  onChange={(e) => setNewServer({ ...newServer, args: e.target.value })}
+                  placeholder="e.g., -y @modelcontextprotocol/server-filesystem /path"
+                  className="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm
+                             text-text-primary font-mono focus:outline-none focus:border-accent"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-text-muted mb-1 block">
+                  {t('mcpServers.envVars')}
+                </label>
+                <textarea
+                  value={newServer.env}
+                  onChange={(e) => setNewServer({ ...newServer, env: e.target.value })}
+                  placeholder="API_KEY=xxx"
+                  rows={2}
+                  className="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm
+                             text-text-primary font-mono focus:outline-none focus:border-accent resize-none"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleAdd}
+                  disabled={!newServer.name || !newServer.command}
+                  className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm
+                             rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {t('mcpServers.addServer')}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsAdding(false);
+                    setNewServer({ name: '', command: '', args: '', env: '' });
+                  }}
+                  className="px-4 py-1.5 bg-surface-hover hover:bg-surface-active text-text-secondary
+                             text-sm rounded-lg transition-colors"
+                >
+                  {t('mcpServers.cancel')}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h3 className="text-sm font-medium text-text-primary">{t('mcpServers.pasteJsonTitle')}</h3>
+              <p className="text-xs text-text-muted mb-2">
+                {t('mcpServers.pasteJsonHint')}
+              </p>
+              <textarea
+                value={pasteJson}
+                onChange={(e) => setPasteJson(e.target.value)}
+                placeholder={`{
+  "mcpServers": {
+    "server-name": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "env": {}
+    }
+  }
+}`}
+                rows={8}
+                className="w-full px-3 py-1.5 bg-bg border border-border rounded text-xs
+                           text-text-primary font-mono focus:outline-none focus:border-accent resize-none"
+              />
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handlePasteSubmit}
+                  disabled={!pasteJson.trim()}
+                  className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm
+                             rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {t('mcpServers.addServers')}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsAdding(false);
+                    setPasteJson('');
+                    setAddMode('form');
+                  }}
+                  className="px-4 py-1.5 bg-surface-hover hover:bg-surface-active text-text-secondary
+                             text-sm rounded-lg transition-colors"
+                >
+                  {t('mcpServers.cancel')}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <button
+            onClick={() => setIsAdding(true)}
+            className="flex items-center gap-2 px-4 py-2 border border-dashed border-border
+                       rounded-lg text-sm text-text-secondary hover:text-text-primary
+                       hover:border-text-muted transition-colors flex-1 justify-center"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            {t('mcpServers.addMcpServer')}
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 px-4 py-2 border border-dashed border-border
+                       rounded-lg text-sm text-text-secondary hover:text-text-primary
+                       hover:border-text-muted transition-colors justify-center"
+            title={t('mcpServers.import')}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M14 10v3a1 1 0 01-1 1H3a1 1 0 01-1-1v-3M8 2v8M5 5l3-3 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {t('mcpServers.import')}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            onChange={handleImport}
+            className="hidden"
+          />
+        </div>
+      )}
+    </div>
+  );
+}

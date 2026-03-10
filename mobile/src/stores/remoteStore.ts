@@ -1,0 +1,491 @@
+/**
+ * Remote store — manages relay connection and remote control state.
+ */
+
+import { create } from 'zustand';
+import { Alert } from 'react-native';
+import { relayClient, type RelayState } from '../services/relay';
+import type { DesktopInfo, Message, SessionInfo } from '../types';
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((block: any) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block: any) => block.text.trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function parseEventStreamMessages(rawMessages: any[]): Message[] {
+  const messages: Message[] = [];
+  let pendingAssistantText: string[] = [];
+  let pendingAssistantTimestamp: string | null = null;
+
+  const flushAssistant = () => {
+    const content = pendingAssistantText.join('\n\n').trim();
+    if (content) {
+      messages.push({
+        id: `assistant-${messages.length}-${Date.now()}`,
+        role: 'assistant',
+        content,
+        timestamp: pendingAssistantTimestamp || new Date().toISOString(),
+      });
+    }
+    pendingAssistantText = [];
+    pendingAssistantTimestamp = null;
+  };
+
+  for (const entry of rawMessages) {
+    if (!entry || typeof entry !== 'object') continue;
+
+    if (entry.type === 'event_msg' && entry.payload?.type === 'user_message') {
+      flushAssistant();
+      const content = String(entry.payload.message || '').trim();
+      if (!content) continue;
+      messages.push({
+        id: `user-${messages.length}-${Date.now()}`,
+        role: 'user',
+        content,
+        timestamp: entry.timestamp || new Date().toISOString(),
+      });
+      continue;
+    }
+
+    if (entry.type === 'event_msg' && entry.payload?.type === 'agent_message') {
+      const content = String(entry.payload.message || '').trim();
+      if (!content) continue;
+      if (!pendingAssistantTimestamp) {
+        pendingAssistantTimestamp = entry.timestamp || new Date().toISOString();
+      }
+      pendingAssistantText.push(content);
+    }
+  }
+
+  flushAssistant();
+  return messages;
+}
+
+function parseContentBlockMessages(rawMessages: any[]): Message[] {
+  const messages: Message[] = [];
+
+  for (const entry of rawMessages) {
+    if (!entry || typeof entry !== 'object' || !entry.message?.role) continue;
+
+    const role = entry.message.role;
+    if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
+
+    const content = extractTextContent(entry.message.content);
+    if (!content) continue;
+
+    messages.push({
+      id: entry.uuid || `${role}-${messages.length}-${Date.now()}`,
+      role,
+      content,
+      timestamp: entry.timestamp || new Date().toISOString(),
+    });
+  }
+
+  return messages;
+}
+
+function parseSessionMessages(rawMessages: any[]): Message[] {
+  const hasRolloutShape = rawMessages.some(
+    (entry) => entry?.type === 'event_msg' && entry?.payload?.type,
+  );
+  return hasRolloutShape ? parseEventStreamMessages(rawMessages) : parseContentBlockMessages(rawMessages);
+}
+
+interface RemoteStore {
+  // Connection
+  connected: boolean;
+  desktops: DesktopInfo[];
+
+  // Active control
+  controllingDesktopId: string | null;
+  controllingDesktopName: string | null;
+
+  // Chat state (for active desktop)
+  messages: Message[];
+  isStreaming: boolean;
+  sessions: SessionInfo[];
+  currentSessionId: string | null;
+  activeProcessId: string | null; // Virtual desktop session ID used to send follow-up turns
+
+  // Actions
+  connect: () => Promise<boolean>;
+  disconnect: () => void;
+  selectDesktop: (desktopId: string) => Promise<void>;
+  releaseDesktop: () => void;
+  sendMessage: (content: string) => Promise<void>;
+  loadSessions: () => Promise<void>;
+  selectSession: (sessionId: string) => Promise<void>;
+  startNewChat: () => Promise<void>;
+  executeCommand: (channel: string, args?: unknown[]) => Promise<any>;
+
+  // Internal
+  setRelayState: (state: RelayState) => void;
+  addMessage: (msg: Message) => void;
+}
+
+export const useRemoteStore = create<RemoteStore>((set, get) => ({
+  connected: false,
+  desktops: [],
+  controllingDesktopId: null,
+  controllingDesktopName: null,
+  messages: [],
+  isStreaming: false,
+  sessions: [],
+  currentSessionId: null,
+  activeProcessId: null,
+
+  connect: async () => {
+    const success = await relayClient.connect();
+    if (success) {
+      const state = relayClient.getState();
+      set({
+        connected: state.connected,
+        desktops: state.desktops,
+      });
+    }
+    return success;
+  },
+
+  disconnect: () => {
+    relayClient.disconnect();
+    set({
+      connected: false,
+      desktops: [],
+      controllingDesktopId: null,
+      controllingDesktopName: null,
+      messages: [],
+      sessions: [],
+      currentSessionId: null,
+      activeProcessId: null,
+    });
+  },
+
+  selectDesktop: async (desktopId: string) => {
+    const desktop = get().desktops.find(d => d.desktopId === desktopId);
+    if (!desktop?.online) return;
+
+    // Check if we have an E2EE session for this desktop
+    if (!relayClient.hasSession(desktopId)) {
+      throw new Error('NO_SESSION');
+    }
+
+    // Request control and wait for ack
+    relayClient.requestControl(desktopId);
+
+    const ack = await new Promise<{ accepted: boolean }>((resolve) => {
+      const timeout = setTimeout(() => {
+        unsub();
+        resolve({ accepted: false });
+      }, 10000);
+
+      const unsub = relayClient.onEvent((event, data) => {
+        if (event === 'control-ack') {
+          clearTimeout(timeout);
+          unsub();
+          resolve({ accepted: !!data?.accepted });
+        }
+      });
+    });
+
+    if (!ack.accepted) {
+      // Desktop rejected or timed out — release in case desktop already locked
+      relayClient.releaseControl(desktopId);
+      Alert.alert(
+        'Control Rejected',
+        'Desktop did not accept the connection. It may be busy or offline. Try again.',
+        [{ text: 'OK' }],
+      );
+      return;
+    }
+
+    set({
+      controllingDesktopId: desktopId,
+      controllingDesktopName: desktop.deviceName,
+      messages: [],
+      sessions: [],
+      currentSessionId: null,
+    });
+
+    // Load sessions from desktop — if this fails, keys are likely out of sync
+    try {
+      await get().loadSessions();
+    } catch (err: any) {
+      if (err?.message?.includes('timeout') || err?.message?.includes('re-pairing')) {
+        // E2EE keys are out of sync — release control and prompt re-pair
+        relayClient.releaseControl(desktopId);
+        set({
+          controllingDesktopId: null,
+          controllingDesktopName: null,
+        });
+        await relayClient.forgetDesktop(desktopId);
+        Alert.alert(
+          'Connection Failed',
+          'Encryption keys are out of sync. Please scan the QR code on the desktop again to re-pair.',
+          [{ text: 'OK' }],
+        );
+        return;
+      }
+      throw err;
+    }
+  },
+
+  releaseDesktop: () => {
+    const { controllingDesktopId, activeProcessId } = get();
+    // Kill active desktop session if any
+    if (activeProcessId) {
+      get().executeCommand('studio:kill', [activeProcessId]).catch(() => {});
+    }
+    // Notify desktop to release control
+    if (controllingDesktopId) {
+      relayClient.releaseControl(controllingDesktopId);
+    }
+    set({
+      controllingDesktopId: null,
+      controllingDesktopName: null,
+      messages: [],
+      sessions: [],
+      currentSessionId: null,
+      isStreaming: false,
+      activeProcessId: null,
+    });
+  },
+
+  sendMessage: async (content: string) => {
+    const { controllingDesktopId } = get();
+    if (!controllingDesktopId) return;
+
+    // Add user message locally
+    const userMsg: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content,
+      timestamp: new Date().toISOString(),
+    };
+    set(s => ({ messages: [...s.messages, userMsg], isStreaming: true }));
+
+    try {
+      let processId = get().activeProcessId;
+
+      // Helper: spawn a new desktop session
+      const spawnProcess = async (): Promise<string> => {
+        const sessionId = get().currentSessionId;
+        const session = get().sessions.find(s => s.id === sessionId);
+        const cwd = session?.projectPath || await get().executeCommand('app:getProjectPath');
+        const pid = await get().executeCommand('studio:spawn', [
+          cwd,
+          sessionId || undefined,
+        ]) as string;
+        set({ activeProcessId: pid });
+        return pid;
+      };
+
+      // Helper: send message with retry
+      const sendWithRetry = async (pid: string): Promise<boolean> => {
+        try {
+          const sent = await get().executeCommand('studio:send', [pid, content]);
+          return !!sent;
+        } catch {
+          return false;
+        }
+      };
+
+      // Spawn a desktop session if we don't have one yet
+      if (!processId) {
+        processId = await spawnProcess();
+      }
+
+      // Send message — if it returns false or throws, the turn is unavailable,
+      // so spawn a fresh session handle and retry once.
+      let sent = await sendWithRetry(processId);
+      if (!sent) {
+        processId = await spawnProcess();
+        sent = await sendWithRetry(processId);
+        if (!sent) {
+          // Both attempts failed, show error
+          set(s => ({
+            isStreaming: false,
+            messages: [...s.messages, {
+              id: `err-${Date.now()}`,
+              role: 'system',
+              content: 'Failed to send message. Please try again.',
+              timestamp: new Date().toISOString(),
+            }],
+          }));
+          return;
+        }
+      }
+    } catch (err: any) {
+      set(s => ({
+        isStreaming: false,
+        messages: [...s.messages, {
+          id: `err-${Date.now()}`,
+          role: 'system',
+          content: `Failed to send: ${err.message}`,
+          timestamp: new Date().toISOString(),
+        }],
+      }));
+    }
+  },
+
+  loadSessions: async () => {
+    try {
+      const rawSessions = await get().executeCommand('sessions:list');
+      console.log('[remoteStore] loadSessions raw result:', JSON.stringify(rawSessions)?.slice(0, 500));
+      // Desktop returns SessionInfo with { id, projectPath, projectName, title, lastMessage, updatedAt }
+      // Mobile expects { id, title, lastMessage, timestamp, projectPath }
+      const sessions: SessionInfo[] = ((rawSessions as any[]) || []).map((s: any) => ({
+        id: s.id,
+        title: s.title || s.projectName || 'Untitled',
+        lastMessage: s.lastMessage,
+        timestamp: s.updatedAt || '',
+        projectPath: s.projectPath || '',
+      }));
+      console.log('[remoteStore] loadSessions mapped:', sessions.length, 'sessions');
+      set({ sessions });
+    } catch (err: any) {
+      console.error('[remoteStore] loadSessions error:', err?.message || err);
+      set({ sessions: [] });
+    }
+  },
+
+  selectSession: async (sessionId: string) => {
+    const { controllingDesktopId } = get();
+    if (!controllingDesktopId) return;
+
+    // Kill previous desktop session if any
+    const { activeProcessId } = get();
+    if (activeProcessId) {
+      get().executeCommand('studio:kill', [activeProcessId]).catch(() => {});
+    }
+
+    set({ currentSessionId: sessionId, messages: [], activeProcessId: null });
+
+    // First, verify the connection is working with a simple command
+    // This will fail fast if E2EE keys are out of sync
+    try {
+      await get().executeCommand('app:getPlatform');
+    } catch {
+      // Connection failed - likely E2EE keys out of sync
+      set({ currentSessionId: null, messages: [], activeProcessId: null });
+      throw new Error('CONNECTION_FAILED');
+    }
+
+    try {
+      // Find the projectPath for this session from the sessions list
+      const session = get().sessions.find(s => s.id === sessionId);
+      const projectPath = session?.projectPath || await get().executeCommand('app:getProjectPath');
+      const rawMessages = await get().executeCommand('sessions:getMessages', [projectPath, sessionId]);
+
+      set({ messages: Array.isArray(rawMessages) ? parseSessionMessages(rawMessages) : [] });
+    } catch {
+      // Ignore
+    }
+  },
+
+  startNewChat: async () => {
+    const { controllingDesktopId } = get();
+    if (!controllingDesktopId) return;
+
+    // Kill previous desktop session if any
+    const { activeProcessId } = get();
+    if (activeProcessId) {
+      get().executeCommand('studio:kill', [activeProcessId]).catch(() => {});
+    }
+
+    // Clear session to start a new chat in the current project
+    set({
+      currentSessionId: null,
+      messages: [],
+      activeProcessId: null,
+    });
+  },
+
+  executeCommand: async (channel: string, args: unknown[] = []) => {
+    const { controllingDesktopId } = get();
+    if (!controllingDesktopId) throw new Error('No desktop connected');
+    return relayClient.executeCommand(controllingDesktopId, channel, args);
+  },
+
+  setRelayState: (state) => {
+    set({
+      connected: state.connected,
+      desktops: state.desktops,
+    });
+
+    // If controlling desktop went offline, release
+    // Only release if the desktop is confirmed offline in the device list
+    // (don't release just because relay's controllingDesktopId is null —
+    //  that field tracks the relay's own state, not our app-level selection)
+    const current = get().controllingDesktopId;
+    if (current) {
+      const desktop = state.desktops.find(d => d.desktopId === current);
+      if (desktop && !desktop.online) {
+        get().releaseDesktop();
+      }
+    }
+  },
+
+  addMessage: (msg) => {
+    set(s => ({ messages: [...s.messages, msg] }));
+  },
+}));
+
+// ─── Initialize relay event listeners ────────────────────────────────
+
+export function initRelayListeners(): () => void {
+  const unsubState = relayClient.onStateChange((state) => {
+    useRemoteStore.getState().setRelayState(state);
+  });
+
+  const unsubEvent = relayClient.onEvent((event, data) => {
+    const store = useRemoteStore.getState();
+
+    switch (event) {
+      case 'control-revoked':
+        // Desktop unlocked — kick back to list
+        store.releaseDesktop();
+        break;
+
+      case 'desktop-disconnected':
+        store.releaseDesktop();
+        break;
+
+      case 'studio:message': {
+        // Streaming message from desktop (already converted to mobile format)
+        const msg = data as any;
+        if (msg?.role === 'assistant' || msg?.role === 'system') {
+          store.addMessage({
+            id: msg.id || `remote-${Date.now()}`,
+            role: msg.role,
+            content: msg.content || '',
+            timestamp: msg.timestamp || new Date().toISOString(),
+          });
+        }
+        break;
+      }
+
+      case 'studio:thread-started': {
+        const threadId = (data as any)?.threadId;
+        if (typeof threadId === 'string' && threadId) {
+          useRemoteStore.setState({ currentSessionId: threadId });
+        }
+        break;
+      }
+
+      case 'studio:stream-end': {
+        useRemoteStore.setState({ isStreaming: false });
+        break;
+      }
+    }
+  });
+
+  return () => {
+    unsubState();
+    unsubEvent();
+  };
+}

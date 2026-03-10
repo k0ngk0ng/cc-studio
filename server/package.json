@@ -1,0 +1,32 @@
+{
+  "name": "cc-studio-server",
+  "version": "0.0.1",
+  "description": "CC Studio auth & sync server",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "version": "node -e \"const{execSync:e}=require('child_process');let v='dev';try{v=e('git describe --tags --always --dirty',{stdio:['ignore','pipe','ignore']}).toString().trim()||'dev';}catch{}require('fs').writeFileSync('src/version.ts','export const VERSION = \\\"'+v+'\\\";\\n')\"",
+    "build": "npm run version && tsc",
+    "start": "node dist/index.js",
+    "admin": "node admin.mjs"
+  },
+  "bin": {
+    "cc-studio-admin": "./admin.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.6.2",
+    "hono": "^4.7.0",
+    "jose": "^6.0.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

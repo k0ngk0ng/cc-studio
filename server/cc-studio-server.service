@@ -1,0 +1,25 @@
+[Unit]
+Description=CC Studio Auth & Sync Server
+After=network.target
+
+[Service]
+Type=simple
+User=cc-studio
+Group=cc-studio
+WorkingDirectory=/opt/cc-studio-server
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+
+# Load config from file
+EnvironmentFile=/etc/cc-studio/server.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cc-studio
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

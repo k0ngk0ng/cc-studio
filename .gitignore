@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Build output
+.vite/
+out/
+dist/
+build/
+
+# Electron Forge
+.webpack/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Coverage
+coverage/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Temporary files
+tmp/
+temp/
+
+# MCP config (may contain sensitive data)
+mcp.json
+
+# Mobile native artifacts
+.gradle/
+Pods/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/

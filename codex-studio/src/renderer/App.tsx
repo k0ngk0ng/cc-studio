@@ -1,0 +1,577 @@
+import React, { useEffect, useCallback, useRef, useState } from 'react';
+import { useAppStore } from './stores/appStore';
+import { useSettingsStore } from './stores/settingsStore';
+import { useAuthStore } from './stores/authStore';
+import { useTabStore, type TabInfo } from './stores/tabStore';
+import { debugLog } from './stores/debugLogStore';
+import { useSessions } from './hooks/useSessions';
+import { useCodex } from './hooks/useCodex';
+import { useGit } from './hooks/useGit';
+import { Sidebar } from './components/Sidebar/Sidebar';
+import { TopBar } from './components/TopBar/TopBar';
+import { TabBar } from './components/TabBar/TabBar';
+import { ChatView } from './components/Chat/ChatView';
+import { chatScrollElement } from './components/Chat/ChatView';
+import { InputBar } from './components/InputBar/InputBar';
+import { BottomPanel } from './components/BottomPanel/BottomPanel';
+import { RightPanel } from './components/DiffPanel/RightPanel';
+import { Settings } from './components/Settings/Settings';
+import { LoginModal } from './components/Auth/LoginModal';
+import { LockOverlay } from './components/Remote/LockOverlay';
+import { initRemoteListeners } from './stores/remoteStore';
+import { LOCAL_COMMANDS, TERMINAL_ONLY_COMMANDS, CLI_SESSION_COMMANDS, BUILTIN_COMMANDS } from './components/InputBar/SlashCommandPopup';
+import { initI18n } from './i18n';
+
+export default function App() {
+  const { panels, togglePanel, setCurrentProject, setPlatform, currentProject } =
+    useAppStore();
+  const { isOpen: settingsOpen, openSettings, closeSettings, settings } = useSettingsStore();
+  const { validateSession: validateAuthSession } = useAuthStore();
+  const { loadSessions, selectSession } = useSessions();
+  const { startSession, sendMessage, stopSession, isStreaming } = useCodex();
+  const [i18nInitialized, setI18nInitialized] = useState(false);
+
+  // Initialize i18n after settings are loaded
+  useEffect(() => {
+    if (!i18nInitialized && settings) {
+      initI18n(settings.general.uiLanguage).then(() => {
+        setI18nInitialized(true);
+      });
+    }
+  }, [settings, i18nInitialized]);
+
+  // Keep git status polling active at app level so commit badge always updates
+  useGit();
+
+  // Guard against race conditions during rapid tab switching
+  const switchCounterRef = useRef(0);
+
+  // ─── Theme switching ──────────────────────────────────────────────
+  useEffect(() => {
+    const theme = settings.appearance.theme;
+    const html = document.documentElement;
+
+    function applyTheme(mode: 'dark' | 'light') {
+      html.classList.remove('dark', 'light');
+      html.classList.add(mode);
+    }
+
+    if (theme === 'system') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      applyTheme(mq.matches ? 'dark' : 'light');
+      const handler = (e: MediaQueryListEvent) => applyTheme(e.matches ? 'dark' : 'light');
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
+    } else {
+      applyTheme(theme);
+    }
+  }, [settings.appearance.theme]);
+
+  // ─── Appearance CSS variables (real-time) ──────────────────────────
+  useEffect(() => {
+    const { fontSize, fontFamily, editorFontSize, editorFontFamily } = settings.appearance;
+    const s = document.documentElement.style;
+    s.setProperty('--ui-font-size', `${fontSize}px`);
+    s.setProperty('--ui-font-family', fontFamily);
+    s.setProperty('--editor-font-size', `${editorFontSize}px`);
+    s.setProperty('--editor-font-family', editorFontFamily);
+  }, [
+    settings.appearance.fontSize,
+    settings.appearance.fontFamily,
+    settings.appearance.editorFontSize,
+    settings.appearance.editorFontFamily,
+  ]);
+
+  // ─── Kill running process when provider profile changes ────────────
+  // The spawned Codex process inherits envVars at start time. When the
+  // user switches profiles the env vars in the store update, but the
+  // already-running process still uses the old values. Killing it here
+  // ensures the next message will spawn a fresh process with the new env.
+  const activeProfileId = settings.provider.activeProfileId;
+  const prevProfileIdRef = useRef(activeProfileId);
+  useEffect(() => {
+    if (prevProfileIdRef.current !== activeProfileId) {
+      prevProfileIdRef.current = activeProfileId;
+      stopSession();
+    }
+  }, [activeProfileId, stopSession]);
+
+  // Initialize app
+  useEffect(() => {
+    async function init() {
+      try {
+        const [platform, projectPath] = await Promise.all([
+          window.api.app.getPlatform(),
+          window.api.app.getProjectPath(),
+        ]);
+
+        debugLog('app', `initialized — platform: ${platform}, cwd: ${projectPath}`);
+        setPlatform(platform);
+
+        const projectName = projectPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || projectPath;
+        setCurrentProject({ path: projectPath, name: projectName });
+
+        // Load existing sessions
+        await loadSessions();
+
+        // Validate auth session
+        validateAuthSession();
+
+        // Get git branch
+        try {
+          const branch = await window.api.git.branch(projectPath);
+          setCurrentProject({ path: projectPath, name: projectName, branch });
+        } catch {
+          // Not a git repo, that's fine
+        }
+      } catch (err) {
+        console.error('Failed to initialize app:', err);
+      }
+    }
+
+    init();
+  }, []);
+
+  // Auto-check for updates on startup (after settings are loaded)
+  useEffect(() => {
+    async function checkUpdates() {
+      try {
+        // Check if there's already an update downloaded (from previous auto-download)
+        const updateState = await window.api.app.getUpdateState();
+        if (updateState.isDownloaded) {
+          debugLog('app', 'Update already downloaded, ready to install on restart');
+          return;
+        }
+
+        // Trigger auto-update check via main process
+        if (settings.updates?.autoCheckOnStartup) {
+          debugLog('app', 'Auto-checking for updates...');
+          // This triggers the check in main process
+          await window.api.app.checkForUpdates();
+        }
+      } catch (err) {
+        // Silent fail for auto-check
+        console.error('Auto-update check failed:', err);
+      }
+    }
+
+    // Only check if settings are loaded
+    if (settings?.updates) {
+      checkUpdates();
+    }
+  }, [settings?.updates?.autoCheckOnStartup]);
+
+  // Initialize remote control event listeners
+  useEffect(() => {
+    const cleanup = initRemoteListeners();
+    return cleanup;
+  }, []);
+
+  // Forward main process debug logs to renderer debug log store
+  useEffect(() => {
+    const handleDebugLog = (data: { category: string; message: string; detail?: string; level: string }) => {
+      debugLog(
+        data.category as any,
+        data.message,
+        data.detail,
+        data.level as any,
+      );
+    };
+    window.api.app.onDebugLog(handleDebugLog);
+    return () => {
+      window.api.app.removeDebugLogListener(handleDebugLog);
+    };
+  }, []);
+
+  // Auto-reload sessions when files change
+  useEffect(() => {
+    const handleChanged = () => {
+      loadSessions();
+    };
+    window.api.sessions.onSessionsChanged(handleChanged);
+    return () => {
+      window.api.sessions.removeSessionsChangedListener(handleChanged);
+    };
+  }, [loadSessions]);
+
+  // Reload sessions when a new session is created or completed
+  useEffect(() => {
+    const handleSessionUpdated = () => {
+      loadSessions();
+    };
+    window.addEventListener('codex:session-updated', handleSessionUpdated);
+    return () => {
+      window.removeEventListener('codex:session-updated', handleSessionUpdated);
+    };
+  }, [loadSessions]);
+
+  // ─── New thread ───────────────────────────────────────────────────
+  const handleNewThread = useCallback(async () => {
+    // Save current session's runtime (don't kill the process — let it run in background)
+    useAppStore.getState().saveCurrentRuntime();
+
+    // Open a new tab with a temp ID — use it as session ID so runtime save/restore works
+    const tempId = `new-${Date.now()}`;
+    useAppStore.getState().resetCurrentSession();
+    useAppStore.getState().setCurrentSession({
+      id: tempId,
+      projectPath: currentProject.path,
+    });
+
+    useTabStore.getState().openTab({
+      id: tempId,
+      title: 'New Thread',
+      isNew: true,
+      projectPath: currentProject.path,
+    });
+  }, [currentProject.path]);
+
+  // ─── Tab handlers ────────────────────────────────────────────────
+  const switchToTab = useCallback(
+    async (tab: TabInfo) => {
+      // Bump counter to detect stale async operations
+      const mySwitch = ++switchCounterRef.current;
+
+      // Save current tab's scroll position BEFORE any state changes tear down the DOM
+      const currentId = useAppStore.getState().currentSession.id;
+      if (currentId && chatScrollElement) {
+        useTabStore.getState().saveScrollPosition(currentId, chatScrollElement.scrollTop);
+      }
+
+      if (tab.isNew) {
+        // Switching to a "new thread" tab — restore its runtime or reset
+        useAppStore.getState().saveCurrentRuntime();
+        const restored = useAppStore.getState().restoreRuntime(tab.id);
+        if (!restored) {
+          useAppStore.getState().resetCurrentSession();
+          useAppStore.getState().setCurrentSession({
+            id: tab.id,
+            projectPath: tab.projectPath || currentProject.path,
+          });
+        }
+      } else {
+        // Switching to an existing session tab — use selectSession flow
+        const sessions = useAppStore.getState().sessions;
+        const session = sessions.find((s) => s.id === tab.id);
+        if (session) {
+          await selectSession(session);
+          // If another switch happened while we were awaiting, bail out —
+          // the newer switch will set the correct state
+          if (switchCounterRef.current !== mySwitch) {
+            debugLog('app', `stale tab switch to ${tab.id} — superseded by newer switch`);
+            return;
+          }
+        }
+      }
+    },
+    [selectSession, currentProject.path]
+  );
+
+  const handleTabSelect = useCallback(
+    async (tab: TabInfo) => {
+      const tabStore = useTabStore.getState();
+      if (tab.id === tabStore.activeTabId) return; // already active
+
+      tabStore.setActiveTab(tab.id);
+      await switchToTab(tab);
+    },
+    [switchToTab]
+  );
+
+  const handleTabClose = useCallback(
+    async (tabId: string) => {
+      const appState = useAppStore.getState();
+
+      // Check if this tab has a streaming process
+      let isStreaming = false;
+      if (appState.currentSession.id === tabId) {
+        isStreaming = appState.currentSession.isStreaming;
+      } else {
+        const runtime = appState.sessionRuntimes.get(tabId);
+        if (runtime?.isStreaming) isStreaming = true;
+      }
+
+      // Confirm before closing a streaming tab
+      if (isStreaming) {
+        const confirmed = window.confirm(
+          'This conversation is still in progress. Close it anyway?'
+        );
+        if (!confirmed) return;
+      }
+
+      // Find the process to kill — check current session or background runtimes
+      let processIdToKill: string | null = null;
+      if (appState.currentSession.id === tabId && appState.currentSession.processId) {
+        processIdToKill = appState.currentSession.processId;
+      } else {
+        const runtime = appState.sessionRuntimes.get(tabId);
+        if (runtime?.processId) {
+          processIdToKill = runtime.processId;
+        }
+      }
+
+      // Kill the Codex process if running
+      if (processIdToKill) {
+        try {
+          await window.api.codex.kill(processIdToKill);
+        } catch {
+          // Process may already be dead
+        }
+      }
+
+      // Clean up runtime cache
+      appState.removeRuntime(tabId);
+
+      // Close the tab and get the new active tab ID
+      const newActiveId = useTabStore.getState().closeTab(tabId);
+
+      // Switch to the new active tab — directly load its session
+      if (newActiveId) {
+        const tab = useTabStore.getState().openTabs.find((t) => t.id === newActiveId);
+        if (tab) {
+          await switchToTab(tab);
+        }
+      } else {
+        // No tabs left — reset to welcome screen
+        useAppStore.getState().resetCurrentSession();
+        useAppStore.getState().setCurrentSession({
+          projectPath: currentProject.path,
+        });
+      }
+    },
+    [switchToTab, currentProject.path]
+  );
+
+  // ─── Local slash command handlers ───────────────────────────────────
+  const handleLocalCommand = useCallback(
+    (content: string): boolean => {
+      const trimmed = content.trim();
+      if (!trimmed.startsWith('/')) return false;
+
+      const parts = trimmed.slice(1).split(/\s+/);
+      const cmd = parts[0].toLowerCase();
+
+      if (!LOCAL_COMMANDS.has(cmd)) return false;
+
+      const { addMessage } = useAppStore.getState();
+
+      // Terminal-only commands — show hint instead of sending to CLI
+      if (TERMINAL_ONLY_COMMANDS.has(cmd)) {
+        addMessage({
+          id: `local-${cmd}-${Date.now()}`,
+          role: 'system',
+          content: `\`/${cmd}\` requires an interactive terminal. Run \`codex /${cmd}\` in the built-in terminal (⌘T) or your system terminal.`,
+          timestamp: new Date().toISOString(),
+        });
+        return true;
+      }
+
+      switch (cmd) {
+        case 'config': {
+          openSettings();
+          return true;
+        }
+
+        case 'help': {
+          // Build help text as markdown
+          const lines = ['**Available slash commands:**\n'];
+          for (const c of BUILTIN_COMMANDS) {
+            const hint = c.argumentHint ? ` \`${c.argumentHint}\`` : '';
+            lines.push(`- \`/${c.name}\`${hint} — ${c.description}`);
+          }
+          lines.push('');
+          lines.push('Custom commands from `~/.codex/commands/` are also available.');
+
+          addMessage({
+            id: `local-help-${Date.now()}`,
+            role: 'assistant',
+            content: lines.join('\n'),
+            timestamp: new Date().toISOString(),
+          });
+          return true;
+        }
+
+        default:
+          return false;
+      }
+    },
+    [openSettings]
+  );
+
+  // ─── Send message ─────────────────────────────────────────────────
+  const handleSendMessage = useCallback(
+    async (content: string, permissionMode?: string, mcpServers?: { id: string; name: string; command: string; args: string[]; env: Record<string, string>; enabled: boolean }[]) => {
+      // Intercept local commands first
+      if (handleLocalCommand(content)) return;
+
+      const state = useAppStore.getState();
+      const projectPath = state.currentSession.projectPath || currentProject.path;
+
+      // CLI slash commands need a running process — don't spawn a throwaway session
+      const trimmed = content.trim();
+      if (trimmed.startsWith('/')) {
+        const cmd = trimmed.slice(1).split(/\s+/)[0].toLowerCase();
+        if (CLI_SESSION_COMMANDS.has(cmd) && !state.currentSession.processId) {
+          useAppStore.getState().addMessage({
+            id: `local-${cmd}-${Date.now()}`,
+            role: 'system',
+            content: `\`/${cmd}\` requires an active conversation. Send a message first to start a session, then use \`/${cmd}\`.`,
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+      }
+
+      // Start a new process if we don't have one
+      if (!state.currentSession.processId) {
+        // Show user message and streaming state immediately (before spawn completes)
+        useAppStore.getState().addMessage({
+          id: crypto.randomUUID(),
+          role: 'user',
+          content,
+          timestamp: new Date().toISOString(),
+        });
+        useAppStore.getState().setIsStreaming(true);
+
+        // Pass sessionId to resume if this session has a real UUID (not a temp "new-*" id)
+        const rawId = state.currentSession.id || '';
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId);
+        const sessionId = isUUID ? rawId : undefined;
+        await startSession(projectPath, sessionId, permissionMode, mcpServers);
+
+        // Message already added above, tell sendMessage to skip
+        await sendMessage(content, { skipAddMessage: true });
+        return;
+      }
+
+      await sendMessage(content);
+    },
+    [startSession, sendMessage, currentProject.path, handleLocalCommand]
+  );
+
+  // ─── Keyboard shortcuts (after all callbacks are defined) ─────────
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // On macOS use metaKey (⌘), on other platforms use ctrlKey
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+
+      if (mod && e.key === 'n') {
+        e.preventDefault();
+        handleNewThread();
+      } else if (mod && e.key === 't') {
+        e.preventDefault();
+        const { panels: p } = useAppStore.getState();
+        // Toggle bottom panel: if any bottom panel is open, close all; otherwise open terminal
+        if (p.terminal || p.logs) {
+          if (p.terminal) togglePanel('terminal');
+          if (p.logs) togglePanel('logs');
+        } else {
+          togglePanel('terminal');
+        }
+      } else if (mod && e.key === 'd') {
+        e.preventDefault();
+        togglePanel('diff');
+      } else if (mod && e.key === 'b') {
+        e.preventDefault();
+        togglePanel('sidebar');
+      } else if (mod && e.key === ',') {
+        e.preventDefault();
+        openSettings();
+      } else if (e.key === 'Escape' && settingsOpen) {
+        e.preventDefault();
+        closeSettings();
+      } else if (e.key === 'F12' || (mod && e.altKey && (e.key === 'i' || e.key === 'I'))) {
+        // DevTools — only when debug mode is on
+        const debugOn = useSettingsStore.getState().settings.general.debugMode;
+        if (debugOn) {
+          e.preventDefault();
+          window.api.app.toggleDevTools();
+        }
+      } else if (mod && e.key === 'w') {
+        // Close active tab
+        e.preventDefault();
+        const activeId = useTabStore.getState().activeTabId;
+        if (activeId) handleTabClose(activeId);
+      } else if (e.ctrlKey && e.key === 'Tab') {
+        // Ctrl+Tab / Ctrl+Shift+Tab to switch tabs
+        e.preventDefault();
+        const tabState = useTabStore.getState();
+        const { openTabs, activeTabId } = tabState;
+        if (openTabs.length <= 1) return;
+        const idx = openTabs.findIndex((t) => t.id === activeTabId);
+        const next = e.shiftKey
+          ? (idx - 1 + openTabs.length) % openTabs.length
+          : (idx + 1) % openTabs.length;
+        handleTabSelect(openTabs[next]);
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [togglePanel, openSettings, closeSettings, settingsOpen, handleNewThread, handleTabClose, handleTabSelect]);
+
+  // Listen for AskUserQuestion answers from ChatView
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const answer = (e as CustomEvent<string>).detail;
+      if (answer) handleSendMessage(answer);
+    };
+    window.addEventListener('codex:user-answer', handler);
+    return () => window.removeEventListener('codex:user-answer', handler);
+  }, [handleSendMessage]);
+
+  return (
+    <div className="flex h-screen w-screen overflow-hidden bg-bg">
+      {/* Login modal */}
+      <LoginModal />
+
+      {/* Remote control lock overlay */}
+      <LockOverlay />
+
+      {/* Settings overlay */}
+      {settingsOpen && (
+        <Settings />
+      )}
+
+      {/* Sidebar */}
+      {panels.sidebar && (
+        <Sidebar onNewThread={handleNewThread} />
+      )}
+
+      {/* Main content area */}
+      <div className="flex flex-1 flex-col min-w-0">
+        {/* Top bar with drag region */}
+        <TopBar />
+
+        {/* Chat area */}
+        <div className="flex flex-1 min-h-0">
+          <div className="flex flex-1 flex-col min-w-0">
+            {/* Tab bar — inside the chat column so it doesn't span over RightPanel */}
+            <TabBar
+              onTabSelect={handleTabSelect}
+              onTabClose={handleTabClose}
+              onNewThread={handleNewThread}
+            />
+
+            {/* Messages */}
+            <ChatView />
+
+            {/* Input */}
+            <InputBar
+              onSend={handleSendMessage}
+              isStreaming={isStreaming}
+              onStop={stopSession}
+            />
+
+            {/* Bottom panel (Terminal + Debug Logs tabs) — always mounted, hidden via CSS */}
+            <BottomPanel visible={panels.terminal || panels.logs} />
+          </div>
+
+          {/* Right panel (Changes + Files tabs) — always mounted, hidden via CSS */}
+          <RightPanel visible={panels.diff} />
+        </div>
+      </div>
+    </div>
+  );
+}
