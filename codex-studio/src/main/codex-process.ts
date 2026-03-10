@@ -62,6 +62,41 @@ function toCliOverride(key: string, value: string): string {
   return `${key}=${JSON.stringify(value)}`;
 }
 
+function pushPermissionArgs(args: string[], permissionMode: string | undefined, isResume: boolean) {
+  switch (permissionMode) {
+    case 'readOnly':
+    case 'plan':
+      if (isResume) {
+        args.push('-c', toCliOverride('sandbox_mode', 'read-only'));
+      } else {
+        args.push('--sandbox', 'read-only');
+      }
+      break;
+    case 'fullAuto':
+    case 'dontAsk':
+      args.push('--full-auto');
+      break;
+    case 'dangerFullAccess':
+    case 'bypassPermissions':
+      if (isResume) {
+        args.push('-c', toCliOverride('sandbox_mode', 'danger-full-access'));
+      } else {
+        args.push('--sandbox', 'danger-full-access');
+      }
+      break;
+    case 'workspaceWrite':
+    case 'acceptEdits':
+    case 'default':
+    default:
+      if (isResume) {
+        args.push('-c', toCliOverride('sandbox_mode', 'workspace-write'));
+      } else {
+        args.push('--sandbox', 'workspace-write');
+      }
+      break;
+  }
+}
+
 function buildArgs(session: ManagedSession, promptFromStdin: boolean): string[] {
   const args: string[] = [];
   const model = extractEnvValue(session.envVars, 'CODEX_MODEL') || extractEnvValue(session.envVars, 'OPENAI_MODEL');
@@ -70,33 +105,16 @@ function buildArgs(session: ManagedSession, promptFromStdin: boolean): string[] 
   const localProvider = extractEnvValue(session.envVars, 'CODEX_LOCAL_PROVIDER');
   const useOss = extractEnvValue(session.envVars, 'CODEX_OSS');
   const ephemeral = extractEnvValue(session.envVars, 'CODEX_EPHEMERAL');
+  const sessionId = session.sessionId;
+  const isResume = typeof sessionId === 'string' && sessionId.length > 0;
 
-  if (session.sessionId) {
+  if (isResume) {
     args.push('exec', 'resume', '--json', '--skip-git-repo-check');
   } else {
     args.push('exec', '--json', '--skip-git-repo-check', '--cd', session.cwd);
   }
 
-  switch (session.permissionMode) {
-    case 'readOnly':
-    case 'plan':
-      args.push('--sandbox', 'read-only');
-      break;
-    case 'fullAuto':
-    case 'dontAsk':
-      args.push('--full-auto');
-      break;
-    case 'dangerFullAccess':
-    case 'bypassPermissions':
-      args.push('--sandbox', 'danger-full-access');
-      break;
-    case 'workspaceWrite':
-    case 'acceptEdits':
-    case 'default':
-    default:
-      args.push('--sandbox', 'workspace-write');
-      break;
-  }
+  pushPermissionArgs(args, session.permissionMode, isResume);
 
   if (model) {
     args.push('--model', model);
@@ -117,8 +135,8 @@ function buildArgs(session: ManagedSession, promptFromStdin: boolean): string[] 
     args.push('--ephemeral');
   }
 
-  if (session.sessionId) {
-    args.push(session.sessionId);
+  if (isResume) {
+    args.push(sessionId);
   }
 
   if (promptFromStdin) {
